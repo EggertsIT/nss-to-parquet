@@ -147,6 +147,21 @@ git clone https://github.com/EggertsIT/nss-to-parquet.git && cd nss-to-parquet &
 This builds the binary, installs config/schema/systemd service, validates config, and starts `nss-ingestor`.
 Run it as a privileged non-root user (with `sudo` access), not from a root login shell.
 
+## AWS Terraform Sample
+
+An AWS deployment sample is available in [infra/aws](./infra/aws).
+It provisions a single EC2-based ingestor with security group allowlisting and SSM access profile.
+
+Quick start:
+
+```bash
+cd infra/aws
+cp terraform.tfvars.example terraform.tfvars
+terraform init
+terraform plan
+terraform apply
+```
+
 ## RHEL 9 / Rocky 9 Installation and Setup
 
 This section is a production-style setup for `RHEL 9` and `Rocky Linux 9`.

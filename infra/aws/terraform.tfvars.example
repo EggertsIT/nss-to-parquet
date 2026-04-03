@@ -1,0 +1,19 @@
+region                 = "us-east-1"
+name_prefix            = "nss-ingestor-dev"
+vpc_id                 = "vpc-xxxxxxxx"
+subnet_id              = "subnet-xxxxxxxx"
+instance_type          = "m7i.large"
+associate_public_ip    = false
+root_volume_size_gb    = 100
+
+nss_port               = 514
+nss_source_cidrs       = ["203.0.113.10/32", "203.0.113.11/32"]
+
+allow_ssh              = false
+admin_cidrs            = ["198.51.100.50/32"]
+allow_metrics_from_admin = false
+metrics_port           = 9090
+metrics_bind_addr      = "127.0.0.1:9090"
+
+repo_url               = "https://github.com/EggertsIT/nss-to-parquet.git"
+repo_ref               = "main"

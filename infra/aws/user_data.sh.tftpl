@@ -1,0 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+
+exec > >(tee /var/log/nss-ingestor-bootstrap.log | logger -t nss-ingestor-bootstrap -s 2>/dev/console) 2>&1
+
+dnf -y update
+dnf -y install git sudo
+
+sudo -u ec2-user bash -lc "cd /home/ec2-user && if [ ! -d nss-to-parquet ]; then git clone ${repo_url} nss-to-parquet; fi"
+sudo -u ec2-user bash -lc "cd /home/ec2-user/nss-to-parquet && git fetch --all --tags && git checkout ${repo_ref}"
+
+sudo -u ec2-user bash -lc "cd /home/ec2-user/nss-to-parquet && ./install.sh --install-deps --install-rust --bind-addr 0.0.0.0:${nss_port} --metrics-addr ${metrics_bind_addr}"
+
+systemctl --no-pager --full status nss-ingestor || true
