@@ -231,6 +231,7 @@ git clone https://github.com/EggertsIT/nss-to-parquet.git && cd nss-to-parquet &
 
 This builds the binary, installs config/schema/systemd service, validates config, and starts `nss-ingestor`.
 Run it as a privileged non-root user (with `sudo` access), not from a root login shell.
+On first install, the script prompts for your NSS Feed Output template line and generates `/etc/nss-ingestor/schema.yaml` from it.
 
 ## AWS Terraform Sample
 
@@ -263,6 +264,19 @@ Installer options:
 
 ```text
 ./install.sh --help
+```
+
+Useful schema-generation flags for installer:
+
+```bash
+# Non-interactive: provide template directly
+./install.sh --feed-template '"%s{time}","%s{ologin}",...,"%s{keyprotectiontype}"'
+
+# Non-interactive: provide template from file
+./install.sh --feed-template-file ./nss_feed_template.csv
+
+# Disable prompt and use default schema.example.yaml fallback
+./install.sh --no-prompt-feed-template
 ```
 
 ### 1. Install OS dependencies
