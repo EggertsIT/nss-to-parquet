@@ -146,7 +146,7 @@ Observability API and health thresholds.
 - `enabled`: Expose HTTP metrics/stats endpoints
 - `bind_addr`: Metrics server address
 - `dashboard_enabled`: Enable `/dashboard` UI
-- `stats_window_hours`: In-memory trend horizon
+- `stats_window_hours`: Trend horizon window (used for dashboard/API trends and persisted state window)
 - `degraded_error_ratio` / `critical_error_ratio`: Error ratio thresholds
 - `degraded_stale_seconds` / `critical_stale_seconds`: Ingest staleness thresholds
 
@@ -471,13 +471,13 @@ Configure your NSS feed destination to this host IP on `TCP 514` (or your custom
 Validate config + schema linkage:
 
 ```bash
-cargo run -- validate-config --config ./config.toml
+cargo run -- validate-config --config ./config.example.toml
 ```
 
 Validate schema and sample lines:
 
 ```bash
-cargo run -- validate-schema --schema ./schema.yaml --sample ./sample.log
+cargo run -- validate-schema --schema ./schema.example.yaml --sample ./sample.log
 ```
 
 Generate schema from NSS feed template string:
@@ -604,6 +604,7 @@ Exposed counters:
 - health status (`ok`, `degraded`, `critical`) and reasons
 - 24h trend persistence across service restarts
 - dashboard trend graphs for both past 24h and past 1h
+- restart metadata (`count_24h`, `last_restart_at`, restart `events`)
 - `/dashboard` includes a schema overview table sourced from `/api/schema`
 - `/dashboard` marks service restarts in the current 24h window
 
