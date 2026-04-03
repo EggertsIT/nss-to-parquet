@@ -129,22 +129,11 @@ Run:
 ./target/release/nss-ingestor run --config ./config.toml
 ```
 
-## Upload to GitHub
-
-Create an empty repository in GitHub (no README/license/gitignore), then from this project directory:
+## Get the Project
 
 ```bash
-git add .
-git commit -m "Initial commit: NSS TCP to Parquet ingestor"
-git remote add origin git@github.com:<org-or-user>/nss-ingestor.git
-git push -u origin main
-```
-
-Verify what will be versioned:
-
-```bash
-git status
-git ls-files
+git clone git@github.com:EggertsIT/nss-to-parquet.git
+cd nss-to-parquet
 ```
 
 ## RHEL 9 / Rocky 9 Installation and Setup
