@@ -34,3 +34,38 @@ Temporary advisory exceptions are managed in [`audit-allowlist.txt`](./audit-all
 
 Current exception:
 - `RUSTSEC-2024-0436` (`paste`, transitive via `parquet`)
+
+## Release Artifact Verification
+
+Verify release binaries before deployment.
+
+1. Download assets from the GitHub release tag (example: `v0.1.0`):
+   - `nss-ingestor-linux-x86_64`
+   - `checksums.txt`
+   - `checksums.txt.sig`
+   - `checksums.txt.pem`
+   - `sbom.cdx.json`
+2. Validate the SHA-256 checksum:
+
+```bash
+mkdir -p dist
+cp nss-ingestor-linux-x86_64 dist/nss-ingestor-linux-x86_64
+sha256sum -c checksums.txt
+```
+
+3. Verify checksum signature and certificate provenance (requires `cosign`):
+
+```bash
+cosign verify-blob \
+  --certificate checksums.txt.pem \
+  --signature checksums.txt.sig \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp "https://github.com/.+/.+/.github/workflows/release-artifacts.yml@refs/tags/.+" \
+  checksums.txt
+```
+
+4. Optionally validate SBOM structure:
+
+```bash
+jq -r '.bomFormat, .specVersion, (.components | length)' sbom.cdx.json
+```
