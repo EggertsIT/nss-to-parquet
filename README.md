@@ -603,6 +603,7 @@ Exposed counters:
 - freshness (seconds since last ingest/write activity)
 - health status (`ok`, `degraded`, `critical`) and reasons
 - 24h trend persistence across service restarts
+- dashboard trend graphs for both past 24h and past 1h
 - `/dashboard` includes a schema overview table sourced from `/api/schema`
 - `/dashboard` marks service restarts in the current 24h window
 

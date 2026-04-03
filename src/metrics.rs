@@ -932,6 +932,12 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
       <div class="card"><div class="label">Parse Errors (24h)</div><canvas id="c3" width="480" height="120"></canvas></div>
       <div class="card"><div class="label">DLQ (24h)</div><canvas id="c4" width="480" height="120"></canvas></div>
     </section>
+    <section class="grid">
+      <div class="card"><div class="label">Ingest Trend (1h)</div><canvas id="c1h" width="480" height="120"></canvas></div>
+      <div class="card"><div class="label">Write Trend (1h)</div><canvas id="c2h" width="480" height="120"></canvas></div>
+      <div class="card"><div class="label">Parse Errors (1h)</div><canvas id="c3h" width="480" height="120"></canvas></div>
+      <div class="card"><div class="label">DLQ (1h)</div><canvas id="c4h" width="480" height="120"></canvas></div>
+    </section>
     <section class="card">
       <div class="label">Health Details</div>
       <ul id="reasons"></ul>
@@ -974,6 +980,11 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       });
       ctx.stroke();
+    }
+
+    function lastNPoints(points, n) {
+      if (!points || points.length <= n) return points || [];
+      return points.slice(points.length - n);
     }
 
     async function loadSchema() {
@@ -1034,6 +1045,12 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
       drawSeries('c2', s.trends, 'written', '#0f9d58');
       drawSeries('c3', s.trends, 'parse_errors', '#d97706');
       drawSeries('c4', s.trends, 'dlq', '#c62828');
+
+      const t1h = lastNPoints(s.trends, 60);
+      drawSeries('c1h', t1h, 'ingested', '#1d4ed8');
+      drawSeries('c2h', t1h, 'written', '#0f9d58');
+      drawSeries('c3h', t1h, 'parse_errors', '#d97706');
+      drawSeries('c4h', t1h, 'dlq', '#c62828');
     }
 
     loadSchema().catch(console.error);
