@@ -5,6 +5,7 @@ mod metrics;
 mod parser;
 mod retention;
 mod schema;
+mod schema_generator;
 mod server;
 mod types;
 mod writer;
@@ -24,6 +25,7 @@ use crate::metrics::{Metrics, StatsSettings, run_metrics_server};
 use crate::parser::{ParserCtx, run_parser_loop};
 use crate::retention::run_retention_loop;
 use crate::schema::SchemaDef;
+use crate::schema_generator::generate_schema_from_feed_template;
 use crate::server::run_tcp_listener;
 use crate::types::{DlqRecord, ParsedRecord, RawRecord};
 use crate::writer::run_parquet_writer;
@@ -52,6 +54,16 @@ enum Command {
         #[arg(long)]
         sample: Option<PathBuf>,
     },
+    GenerateSchema {
+        #[arg(long, conflicts_with = "feed_template_file")]
+        feed_template: Option<String>,
+        #[arg(long, conflicts_with = "feed_template")]
+        feed_template_file: Option<PathBuf>,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -63,6 +75,12 @@ async fn main() -> Result<()> {
         Command::Run { config } => run(config).await,
         Command::ValidateConfig { config } => validate_config(config),
         Command::ValidateSchema { schema, sample } => validate_schema(schema, sample).await,
+        Command::GenerateSchema {
+            feed_template,
+            feed_template_file,
+            output,
+            force,
+        } => generate_schema(feed_template, feed_template_file, output, force),
     }
 }
 
@@ -286,5 +304,46 @@ async fn validate_schema(schema_path: PathBuf, sample: Option<PathBuf>) -> Resul
         info!(checked, "sample validation passed");
     }
 
+    Ok(())
+}
+
+fn generate_schema(
+    feed_template: Option<String>,
+    feed_template_file: Option<PathBuf>,
+    output: PathBuf,
+    force: bool,
+) -> Result<()> {
+    let template = match (feed_template, feed_template_file) {
+        (Some(s), None) => s,
+        (None, Some(path)) => std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read feed template file {}", path.display()))?,
+        (None, None) => anyhow::bail!("provide either --feed-template or --feed-template-file"),
+        (Some(_), Some(_)) => {
+            anyhow::bail!("provide only one of --feed-template or --feed-template-file")
+        }
+    };
+
+    if output.exists() && !force {
+        anyhow::bail!(
+            "output file {} already exists (use --force to overwrite)",
+            output.display()
+        );
+    }
+    if let Some(parent) = output.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create output directory {}", parent.display()))?;
+    }
+
+    let schema = generate_schema_from_feed_template(&template)?;
+    let yaml = serde_yaml::to_string(&schema)?;
+    std::fs::write(&output, yaml)
+        .with_context(|| format!("failed to write schema to {}", output.display()))?;
+    info!(
+        output = %output.display(),
+        fields = schema.fields.len(),
+        "schema generated from feed template"
+    );
     Ok(())
 }

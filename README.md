@@ -360,6 +360,24 @@ Validate schema and sample lines:
 cargo run -- validate-schema --schema ./schema.yaml --sample ./sample.log
 ```
 
+Generate schema from NSS feed template string:
+
+```bash
+cargo run -- generate-schema \
+  --feed-template '"%s{time}","%s{ologin}","%s{proto}","%s{eurl}"' \
+  --output ./schema.generated.yaml
+```
+
+Generate schema from a template file:
+
+```bash
+cargo run -- generate-schema \
+  --feed-template-file ./nss_feed_template.csv \
+  --output ./schema.generated.yaml
+```
+
+If output file already exists, add `--force`.
+
 Benchmark sustained ingest rate:
 
 ```bash

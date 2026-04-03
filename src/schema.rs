@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use arrow_schema::{DataType, Field, Schema};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SchemaDef {
     pub fields: Vec<FieldDef>,
 }
@@ -55,7 +55,7 @@ impl SchemaDef {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FieldDef {
     pub name: String,
     #[serde(rename = "type")]
@@ -68,7 +68,7 @@ const fn default_nullable() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LogicalType {
     String,
