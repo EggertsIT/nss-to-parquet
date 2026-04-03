@@ -8,11 +8,6 @@ output "private_ip" {
   value       = aws_instance.nss_ingestor.private_ip
 }
 
-output "public_ip" {
-  description = "Public IP address (if associate_public_ip = true)."
-  value       = aws_instance.nss_ingestor.public_ip
-}
-
 output "security_group_id" {
   description = "Security group attached to the instance."
   value       = aws_security_group.nss_ingestor.id

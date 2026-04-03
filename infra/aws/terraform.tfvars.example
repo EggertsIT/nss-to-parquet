@@ -3,7 +3,6 @@ name_prefix            = "nss-ingestor-dev"
 vpc_id                 = "vpc-xxxxxxxx"
 subnet_id              = "subnet-xxxxxxxx"
 instance_type          = "m7i.large"
-associate_public_ip    = false
 root_volume_size_gb    = 100
 
 nss_port               = 514

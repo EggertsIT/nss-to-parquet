@@ -16,7 +16,7 @@ variable "vpc_id" {
 }
 
 variable "subnet_id" {
-  description = "Target subnet ID for the instance."
+  description = "Target private subnet ID for the instance."
   type        = string
 }
 
@@ -24,12 +24,6 @@ variable "instance_type" {
   description = "EC2 instance type."
   type        = string
   default     = "m7i.large"
-}
-
-variable "associate_public_ip" {
-  description = "Whether to associate a public IPv4 address to the instance."
-  type        = bool
-  default     = false
 }
 
 variable "root_volume_size_gb" {
@@ -42,11 +36,21 @@ variable "nss_port" {
   description = "TCP port exposed for Zscaler NSS feed."
   type        = number
   default     = 514
+
+  validation {
+    condition     = var.nss_port >= 1 && var.nss_port <= 65535
+    error_message = "nss_port must be between 1 and 65535."
+  }
 }
 
 variable "nss_source_cidrs" {
   description = "CIDR list allowed to send NSS logs to the instance."
   type        = list(string)
+
+  validation {
+    condition     = length(var.nss_source_cidrs) > 0
+    error_message = "nss_source_cidrs must contain at least one CIDR."
+  }
 }
 
 variable "allow_ssh" {

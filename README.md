@@ -150,7 +150,7 @@ Run it as a privileged non-root user (with `sudo` access), not from a root login
 ## AWS Terraform Sample
 
 An AWS deployment sample is available in [infra/aws](./infra/aws).
-It provisions a single EC2-based ingestor with security group allowlisting and SSM access profile.
+It provisions a single EC2-based ingestor with security group allowlisting, SSM access profile, and enforced private-subnet deployment (no public ingest IP).
 
 Quick start:
 

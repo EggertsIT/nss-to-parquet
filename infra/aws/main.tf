@@ -13,6 +13,10 @@ data "aws_ami" "al2023" {
   }
 }
 
+data "aws_subnet" "selected" {
+  id = var.subnet_id
+}
+
 resource "aws_security_group" "nss_ingestor" {
   name        = "${var.name_prefix}-sg"
   description = "Security group for NSS ingestor sample"
@@ -94,7 +98,7 @@ resource "aws_instance" "nss_ingestor" {
   subnet_id                   = var.subnet_id
   vpc_security_group_ids      = [aws_security_group.nss_ingestor.id]
   iam_instance_profile        = aws_iam_instance_profile.ec2_profile.name
-  associate_public_ip_address = var.associate_public_ip
+  associate_public_ip_address = false
 
   metadata_options {
     http_endpoint = "enabled"
@@ -117,5 +121,22 @@ resource "aws_instance" "nss_ingestor" {
 
   tags = {
     Name = "${var.name_prefix}-ec2"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = data.aws_subnet.selected.vpc_id == var.vpc_id
+      error_message = "subnet_id must belong to vpc_id."
+    }
+
+    precondition {
+      condition     = !data.aws_subnet.selected.map_public_ip_on_launch
+      error_message = "subnet_id must be a private subnet (map_public_ip_on_launch = false)."
+    }
+
+    precondition {
+      condition     = (!var.allow_ssh && !var.allow_metrics_from_admin) || length(var.admin_cidrs) > 0
+      error_message = "admin_cidrs must be set when allow_ssh or allow_metrics_from_admin is enabled."
+    }
   }
 }
