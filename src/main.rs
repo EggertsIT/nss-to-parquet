@@ -108,7 +108,17 @@ async fn run(config_path: PathBuf) -> Result<()> {
         );
     }
 
-    let metrics = Arc::new(Metrics::new(cfg.metrics.stats_window_hours.max(1)));
+    std::fs::create_dir_all(&cfg.writer.output_dir).with_context(|| {
+        format!(
+            "failed to create writer output dir {}",
+            cfg.writer.output_dir.display()
+        )
+    })?;
+    let metrics_state_path = cfg.writer.output_dir.join(".metrics-state.json");
+    let metrics = Arc::new(Metrics::new_with_persistence(
+        cfg.metrics.stats_window_hours.max(1),
+        Some(metrics_state_path),
+    ));
     let schema_overview = SchemaOverview {
         schema_path: cfg.schema.path.display().to_string(),
         time_field: cfg.schema.time_field.clone(),
@@ -280,6 +290,9 @@ async fn run(config_path: PathBuf) -> Result<()> {
     let _ = writer_task.await;
     let _ = retention_task.await;
     let _ = dlq_task.await;
+    if let Err(err) = metrics.persist_now() {
+        error!(error = %err, "failed to persist metrics state on shutdown");
+    }
 
     info!("nss ingestor stopped");
     Ok(())

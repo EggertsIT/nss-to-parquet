@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -9,8 +10,9 @@ use axum::response::Html;
 use axum::routing::get;
 use axum::{Json, Router};
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
+use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub struct StatsSettings {
@@ -49,6 +51,10 @@ pub struct Metrics {
     started_at_epoch: i64,
     last_ingest_epoch: AtomicI64,
     last_write_epoch: AtomicI64,
+    window_hours: u32,
+    restart_events: Mutex<Vec<i64>>,
+    state_path: Option<PathBuf>,
+    last_persist_minute: AtomicI64,
     timeline: Mutex<TimeSeriesWindow>,
 }
 
@@ -60,8 +66,26 @@ impl Default for Metrics {
 
 impl Metrics {
     pub fn new(window_hours: u32) -> Self {
+        Self::new_with_persistence(window_hours, None)
+    }
+
+    pub fn new_with_persistence(window_hours: u32, state_path: Option<PathBuf>) -> Self {
         let now = Utc::now().timestamp();
-        Self {
+        let window_hours = window_hours.max(1);
+        let restored = state_path
+            .as_deref()
+            .and_then(load_persisted_state)
+            .map(|mut state| {
+                state.trends.retain(|b| {
+                    b.minute_epoch >= floor_to_minute(now) - ((window_hours as i64 - 1) * 60)
+                });
+                state
+                    .restart_events
+                    .retain(|ts| *ts >= floor_to_minute(now) - ((window_hours as i64 - 1) * 60));
+                state
+            });
+
+        let metrics = Self {
             raw_received: AtomicU64::new(0),
             parsed_ok: AtomicU64::new(0),
             parsed_error: AtomicU64::new(0),
@@ -76,8 +100,70 @@ impl Metrics {
             started_at_epoch: now,
             last_ingest_epoch: AtomicI64::new(0),
             last_write_epoch: AtomicI64::new(0),
-            timeline: Mutex::new(TimeSeriesWindow::new(window_hours.max(1))),
+            window_hours,
+            restart_events: Mutex::new(Vec::new()),
+            state_path,
+            last_persist_minute: AtomicI64::new(floor_to_minute(now) - 60),
+            timeline: Mutex::new(TimeSeriesWindow::new(window_hours)),
+        };
+
+        if let Some(state) = restored {
+            metrics
+                .raw_received
+                .store(state.raw_received, Ordering::Relaxed);
+            metrics.parsed_ok.store(state.parsed_ok, Ordering::Relaxed);
+            metrics
+                .parsed_error
+                .store(state.parsed_error, Ordering::Relaxed);
+            metrics
+                .written_rows
+                .store(state.written_rows, Ordering::Relaxed);
+            metrics
+                .written_files
+                .store(state.written_files, Ordering::Relaxed);
+            metrics.dlq_rows.store(state.dlq_rows, Ordering::Relaxed);
+            metrics
+                .durability_replayed
+                .store(state.durability_replayed, Ordering::Relaxed);
+            metrics
+                .durability_commits
+                .store(state.durability_commits, Ordering::Relaxed);
+            metrics
+                .durability_errors
+                .store(state.durability_errors, Ordering::Relaxed);
+            metrics
+                .connection_dropped
+                .store(state.connection_dropped, Ordering::Relaxed);
+            metrics
+                .connection_timeouts
+                .store(state.connection_timeouts, Ordering::Relaxed);
+            metrics
+                .last_ingest_epoch
+                .store(state.last_ingest_epoch, Ordering::Relaxed);
+            metrics
+                .last_write_epoch
+                .store(state.last_write_epoch, Ordering::Relaxed);
+
+            if let Ok(mut guard) = metrics.timeline.lock() {
+                *guard = TimeSeriesWindow::from_buckets(window_hours, state.trends, now);
+            }
+            if let Ok(mut events) = metrics.restart_events.lock() {
+                *events = state.restart_events;
+            }
         }
+
+        if let Ok(mut events) = metrics.restart_events.lock() {
+            events.push(now);
+            trim_restart_events(&mut events, now, window_hours);
+            events.sort_unstable();
+            events.dedup();
+        }
+
+        if let Err(err) = metrics.persist_now() {
+            warn!(error = %err, "failed to persist metrics state on startup");
+        }
+
+        metrics
     }
 
     pub fn observe_raw_received(&self, n: u64) {
@@ -89,6 +175,7 @@ impl Metrics {
 
     pub fn observe_parsed_ok(&self, n: u64) {
         self.parsed_ok.fetch_add(n, Ordering::Relaxed);
+        self.maybe_persist(Utc::now().timestamp());
     }
 
     pub fn observe_parsed_error(&self, n: u64) {
@@ -106,6 +193,7 @@ impl Metrics {
 
     pub fn observe_written_files(&self, n: u64) {
         self.written_files.fetch_add(n, Ordering::Relaxed);
+        self.maybe_persist(Utc::now().timestamp());
     }
 
     pub fn observe_dlq_rows(&self, n: u64) {
@@ -116,22 +204,27 @@ impl Metrics {
 
     pub fn observe_durability_replayed(&self, n: u64) {
         self.durability_replayed.fetch_add(n, Ordering::Relaxed);
+        self.maybe_persist(Utc::now().timestamp());
     }
 
     pub fn observe_durability_committed(&self, n: u64) {
         self.durability_commits.fetch_add(n, Ordering::Relaxed);
+        self.maybe_persist(Utc::now().timestamp());
     }
 
     pub fn observe_durability_error(&self, n: u64) {
         self.durability_errors.fetch_add(n, Ordering::Relaxed);
+        self.maybe_persist(Utc::now().timestamp());
     }
 
     pub fn observe_connection_dropped(&self, n: u64) {
         self.connection_dropped.fetch_add(n, Ordering::Relaxed);
+        self.maybe_persist(Utc::now().timestamp());
     }
 
     pub fn observe_connection_timeout(&self, n: u64) {
         self.connection_timeouts.fetch_add(n, Ordering::Relaxed);
+        self.maybe_persist(Utc::now().timestamp());
     }
 
     pub fn render_prometheus(&self) -> String {
@@ -246,6 +339,15 @@ impl Metrics {
             total_ingested,
             settings,
         );
+        let restart_events = self
+            .restart_events
+            .lock()
+            .expect("restart events lock poisoned")
+            .clone();
+        let restart_events_24h = restart_events
+            .into_iter()
+            .filter(|ts| *ts >= floor_to_minute(now) - ((self.window_hours as i64 - 1) * 60))
+            .collect::<Vec<_>>();
 
         StatsResponse {
             status,
@@ -267,6 +369,14 @@ impl Metrics {
                 ingest_last_seen_seconds_ago,
                 write_last_seen_seconds_ago,
             },
+            restarts: Restarts {
+                count_24h: restart_events_24h.len() as u64,
+                last_restart_at: restart_events_24h.last().and_then(|ts| format_epoch(*ts)),
+                events: restart_events_24h
+                    .into_iter()
+                    .filter_map(format_epoch)
+                    .collect(),
+            },
             trends,
         }
     }
@@ -280,6 +390,69 @@ impl Metrics {
             .lock()
             .expect("metrics timeline lock poisoned");
         guard.record(kind, n, now);
+        drop(guard);
+        self.maybe_persist(now);
+    }
+
+    pub fn persist_now(&self) -> std::io::Result<()> {
+        let Some(path) = self.state_path.as_deref() else {
+            return Ok(());
+        };
+
+        let trends = {
+            let mut guard = self
+                .timeline
+                .lock()
+                .expect("metrics timeline lock poisoned");
+            guard.trim_to_window(Utc::now().timestamp());
+            guard.buckets_vec()
+        };
+
+        let restart_events = self
+            .restart_events
+            .lock()
+            .expect("restart events lock poisoned")
+            .clone();
+        let state = PersistedMetricsState {
+            version: 1,
+            raw_received: self.raw_received.load(Ordering::Relaxed),
+            parsed_ok: self.parsed_ok.load(Ordering::Relaxed),
+            parsed_error: self.parsed_error.load(Ordering::Relaxed),
+            written_rows: self.written_rows.load(Ordering::Relaxed),
+            written_files: self.written_files.load(Ordering::Relaxed),
+            dlq_rows: self.dlq_rows.load(Ordering::Relaxed),
+            durability_replayed: self.durability_replayed.load(Ordering::Relaxed),
+            durability_commits: self.durability_commits.load(Ordering::Relaxed),
+            durability_errors: self.durability_errors.load(Ordering::Relaxed),
+            connection_dropped: self.connection_dropped.load(Ordering::Relaxed),
+            connection_timeouts: self.connection_timeouts.load(Ordering::Relaxed),
+            last_ingest_epoch: self.last_ingest_epoch.load(Ordering::Relaxed),
+            last_write_epoch: self.last_write_epoch.load(Ordering::Relaxed),
+            trends,
+            restart_events,
+        };
+        save_persisted_state(path, &state)
+    }
+
+    fn maybe_persist(&self, now: i64) {
+        if self.state_path.is_none() {
+            return;
+        }
+        let minute = floor_to_minute(now);
+        let last = self.last_persist_minute.load(Ordering::Relaxed);
+        if minute <= last {
+            return;
+        }
+        if self
+            .last_persist_minute
+            .compare_exchange(last, minute, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+        if let Err(err) = self.persist_now() {
+            warn!(error = %err, "failed to persist metrics state");
+        }
     }
 }
 
@@ -474,6 +647,21 @@ impl TimeSeriesWindow {
         }
         sums
     }
+
+    fn buckets_vec(&self) -> Vec<MinuteBucket> {
+        self.buckets.iter().copied().collect()
+    }
+
+    fn from_buckets(window_hours: u32, mut buckets: Vec<MinuteBucket>, now: i64) -> Self {
+        buckets.sort_by_key(|b| b.minute_epoch);
+        buckets.dedup_by_key(|b| b.minute_epoch);
+        let mut window = Self {
+            window_minutes: window_hours.max(1) * 60,
+            buckets: VecDeque::from(buckets),
+        };
+        window.trim_to_window(now);
+        window
+    }
 }
 
 fn floor_to_minute(ts: i64) -> i64 {
@@ -488,7 +676,7 @@ struct BucketSums {
     dlq: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 struct MinuteBucket {
     minute_epoch: i64,
     ingested: u64,
@@ -508,6 +696,55 @@ impl MinuteBucket {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct PersistedMetricsState {
+    version: u8,
+    raw_received: u64,
+    parsed_ok: u64,
+    parsed_error: u64,
+    written_rows: u64,
+    written_files: u64,
+    dlq_rows: u64,
+    durability_replayed: u64,
+    durability_commits: u64,
+    durability_errors: u64,
+    connection_dropped: u64,
+    connection_timeouts: u64,
+    last_ingest_epoch: i64,
+    last_write_epoch: i64,
+    trends: Vec<MinuteBucket>,
+    restart_events: Vec<i64>,
+}
+
+fn save_persisted_state(path: &Path, state: &PersistedMetricsState) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp_path = path.with_extension("tmp");
+    let body = serde_json::to_vec(state).map_err(std::io::Error::other)?;
+    std::fs::write(&tmp_path, body)?;
+    std::fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
+fn load_persisted_state(path: &Path) -> Option<PersistedMetricsState> {
+    let body = std::fs::read(path).ok()?;
+    let state = serde_json::from_slice::<PersistedMetricsState>(&body).ok()?;
+    if state.version != 1 {
+        return None;
+    }
+    Some(state)
+}
+
+fn trim_restart_events(events: &mut Vec<i64>, now: i64, window_hours: u32) {
+    let min_epoch = floor_to_minute(now) - ((window_hours as i64 - 1) * 60);
+    events.retain(|ts| *ts >= min_epoch);
+}
+
+fn format_epoch(ts: i64) -> Option<String> {
+    chrono::DateTime::<Utc>::from_timestamp(ts, 0).map(|dt| dt.to_rfc3339())
+}
+
 #[derive(Debug, Serialize)]
 pub struct StatsResponse {
     pub status: String,
@@ -517,6 +754,7 @@ pub struct StatsResponse {
     pub totals: Totals,
     pub rates_per_sec: RatesPerSec,
     pub freshness: Freshness,
+    pub restarts: Restarts,
     pub trends: Vec<TrendPoint>,
 }
 
@@ -548,6 +786,13 @@ pub struct RatesPerSec {
 pub struct Freshness {
     pub ingest_last_seen_seconds_ago: Option<u64>,
     pub write_last_seen_seconds_ago: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Restarts {
+    pub count_24h: u64,
+    pub last_restart_at: Option<String>,
+    pub events: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -679,6 +924,7 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
       <div class="card"><div class="label">DLQ Rows</div><div id="dlq" class="value">0</div></div>
       <div class="card"><div class="label">Ingest Rate (1m)</div><div id="ingr" class="value">0/s</div></div>
       <div class="card"><div class="label">Write Rate (1m)</div><div id="wrr" class="value">0/s</div></div>
+      <div class="card"><div class="label">Restarts (24h)</div><div id="restarts" class="value">0</div><div id="lastRestart" class="muted">last: n/a</div></div>
     </section>
     <section class="grid">
       <div class="card"><div class="label">Ingest Trend (24h)</div><canvas id="c1" width="480" height="120"></canvas></div>
@@ -690,6 +936,8 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
       <div class="label">Health Details</div>
       <ul id="reasons"></ul>
       <div class="muted" id="freshness"></div>
+      <div class="label" style="margin-top:10px;">Service Restarts (24h)</div>
+      <ul id="restartEvents"></ul>
     </section>
     <section class="card">
       <div class="label">Schema Overview</div>
@@ -752,6 +1000,8 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
       byId('dlq').textContent = fmtInt(s.totals.dlq_rows);
       byId('ingr').textContent = fmtRate(s.rates_per_sec.ingest_1m);
       byId('wrr').textContent = fmtRate(s.rates_per_sec.write_1m);
+      byId('restarts').textContent = fmtInt(s.restarts?.count_24h ?? 0);
+      byId('lastRestart').textContent = `last: ${s.restarts?.last_restart_at ?? 'n/a'}`;
       byId('ts').textContent = `updated ${new Date(s.generated_at).toLocaleString()}`;
 
       const badge = byId('status');
@@ -766,6 +1016,19 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
         s.reasons.forEach(r => { const li = document.createElement('li'); li.textContent = r; reasons.appendChild(li); });
       }
       byId('freshness').textContent = `ingest last seen: ${s.freshness.ingest_last_seen_seconds_ago ?? 'n/a'}s, write last seen: ${s.freshness.write_last_seen_seconds_ago ?? 'n/a'}s`;
+
+      const restartEvents = byId('restartEvents');
+      restartEvents.innerHTML = '';
+      const events = s.restarts?.events || [];
+      if (events.length === 0) {
+        const li = document.createElement('li'); li.textContent = 'No restart events in current window.'; restartEvents.appendChild(li);
+      } else {
+        events.slice().reverse().forEach((r) => {
+          const li = document.createElement('li');
+          li.textContent = r;
+          restartEvents.appendChild(li);
+        });
+      }
 
       drawSeries('c1', s.trends, 'ingested', '#1d4ed8');
       drawSeries('c2', s.trends, 'written', '#0f9d58');

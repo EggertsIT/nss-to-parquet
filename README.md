@@ -153,6 +153,7 @@ Observability API and health thresholds.
 Defaults:
 - App default for `dashboard_enabled` is `false`.
 - Installer-generated config sets `dashboard_enabled = true`.
+- Dashboard/stat trend state is persisted to `writer.output_dir/.metrics-state.json` and restored on restart.
 
 #### `[durability]`
 
@@ -549,6 +550,12 @@ DLQ line format:
 <received_at_rfc3339>\t<peer_addr>\t<reason>\t<raw_line>
 ```
 
+Metrics persistence file:
+
+```text
+data/.metrics-state.json
+```
+
 ## Metrics
 
 If enabled, scrape:
@@ -595,8 +602,9 @@ Exposed counters:
 - rates (`1m` and `5m` per second for ingest/write/errors/DLQ)
 - freshness (seconds since last ingest/write activity)
 - health status (`ok`, `degraded`, `critical`) and reasons
-- in-memory 24h minute trends
+- 24h trend persistence across service restarts
 - `/dashboard` includes a schema overview table sourced from `/api/schema`
+- `/dashboard` marks service restarts in the current 24h window
 
 ## DuckDB Query Examples
 
