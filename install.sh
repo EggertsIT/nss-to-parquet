@@ -14,6 +14,7 @@ INSTALL_RUST=0
 SKIP_BUILD=0
 NO_START=0
 ALLOW_UNSUPPORTED_OS=0
+ALLOW_ROOT=0
 LISTENER_BIND_ADDR="${LISTENER_BIND_ADDR:-0.0.0.0:514}"
 METRICS_BIND_ADDR="${METRICS_BIND_ADDR:-127.0.0.1:9090}"
 
@@ -45,6 +46,7 @@ Options:
   --bind-addr ADDR        Listener bind address (default: 0.0.0.0:514).
   --metrics-addr ADDR     Metrics bind address (default: 127.0.0.1:9090).
   --allow-unsupported-os  Continue even if OS is not RHEL/Rocky family.
+  --allow-root            Allow direct root execution (not recommended).
   -h, --help              Show this help.
 USAGE
 }
@@ -68,6 +70,9 @@ setup_sudo() {
   if [[ "${EUID}" -eq 0 ]]; then
     SUDO=()
     INVOKER_USER="${SUDO_USER:-root}"
+    if [[ "$INVOKER_USER" == "root" ]]; then
+      warn "running from a root account is discouraged; run as a privileged user and let sudo handle elevation."
+    fi
   else
     require_cmd sudo
     SUDO=(sudo)
@@ -317,6 +322,10 @@ parse_args() {
         ALLOW_UNSUPPORTED_OS=1
         shift
         ;;
+      --allow-root)
+        ALLOW_ROOT=1
+        shift
+        ;;
       -h|--help)
         usage
         exit 0
@@ -331,6 +340,10 @@ parse_args() {
 main() {
   parse_args "$@"
   setup_sudo
+
+  if [[ "$INVOKER_USER" == "root" && "$INSTALL_RUST" -eq 1 && "$ALLOW_ROOT" -eq 0 ]]; then
+    die "--install-rust from a root account would install Rust under /root. Run from a privileged non-root user (sudo), or pass --allow-root if intentional."
+  fi
 
   if ! is_supported_os && [[ "$ALLOW_UNSUPPORTED_OS" -eq 0 ]]; then
     die "unsupported OS. This installer targets RHEL/Rocky family. Use --allow-unsupported-os to continue."

@@ -145,6 +145,7 @@ git clone https://github.com/EggertsIT/nss-to-parquet.git && cd nss-to-parquet &
 ```
 
 This builds the binary, installs config/schema/systemd service, validates config, and starts `nss-ingestor`.
+Run it as a privileged non-root user (with `sudo` access), not from a root login shell.
 
 ## RHEL 9 / Rocky 9 Installation and Setup
 
@@ -155,6 +156,8 @@ If Rust is already present and OS dependencies are already installed, you can us
 ```bash
 ./install.sh
 ```
+
+If you run from a root account and pass `--install-rust`, the installer will stop by default to avoid installing Rust under `/root`.
 
 Installer options:
 
