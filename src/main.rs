@@ -21,7 +21,9 @@ use tracing::{error, info};
 use crate::config::AppConfig;
 use crate::dlq::run_dlq_writer;
 use crate::durability::Durability;
-use crate::metrics::{Metrics, StatsSettings, run_metrics_server};
+use crate::metrics::{
+    Metrics, SchemaFieldOverview, SchemaOverview, StatsSettings, run_metrics_server,
+};
 use crate::parser::{ParserCtx, run_parser_loop};
 use crate::retention::run_retention_loop;
 use crate::schema::SchemaDef;
@@ -107,6 +109,25 @@ async fn run(config_path: PathBuf) -> Result<()> {
     }
 
     let metrics = Arc::new(Metrics::new(cfg.metrics.stats_window_hours.max(1)));
+    let schema_overview = SchemaOverview {
+        schema_path: cfg.schema.path.display().to_string(),
+        time_field: cfg.schema.time_field.clone(),
+        time_format: cfg.schema.time_format.clone(),
+        timezone: cfg.schema.timezone.clone(),
+        strict_type_validation: cfg.schema.strict_type_validation,
+        field_count: schema.fields.len(),
+        fields: schema
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(index, field)| SchemaFieldOverview {
+                index,
+                name: field.name.clone(),
+                logical_type: field.logical_type.as_str().to_string(),
+                nullable: field.nullable,
+            })
+            .collect(),
+    };
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let (raw_tx, raw_rx) = mpsc::channel::<RawRecord>(cfg.listener.ingress_channel_capacity);
@@ -124,9 +145,12 @@ async fn run(config_path: PathBuf) -> Result<()> {
             degraded_stale_seconds: cfg.metrics.degraded_stale_seconds,
             critical_stale_seconds: cfg.metrics.critical_stale_seconds,
         };
+        let schema_overview = schema_overview.clone();
         let shutdown = shutdown_rx.clone();
         Some(tokio::spawn(async move {
-            if let Err(err) = run_metrics_server(addr, metrics, settings, shutdown).await {
+            if let Err(err) =
+                run_metrics_server(addr, metrics, settings, schema_overview, shutdown).await
+            {
                 error!(error = %err, "metrics server exited with error");
             }
         }))

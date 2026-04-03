@@ -91,4 +91,15 @@ impl LogicalType {
             }
         }
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LogicalType::String => "string",
+            LogicalType::Int64 => "int64",
+            LogicalType::Float64 => "float64",
+            LogicalType::Boolean => "boolean",
+            LogicalType::Timestamp => "timestamp",
+            LogicalType::Ip => "ip",
+        }
+    }
 }

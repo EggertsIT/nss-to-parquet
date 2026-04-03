@@ -537,6 +537,12 @@ Structured stats API:
 GET /api/stats
 ```
 
+Schema overview API (active schema loaded by service):
+
+```text
+GET /api/schema
+```
+
 Built-in dashboard (if `metrics.dashboard_enabled = true`):
 
 ```text
@@ -564,6 +570,7 @@ Exposed counters:
 - freshness (seconds since last ingest/write activity)
 - health status (`ok`, `degraded`, `critical`) and reasons
 - in-memory 24h minute trends
+- `/dashboard` includes a schema overview table sourced from `/api/schema`
 
 ## DuckDB Query Examples
 

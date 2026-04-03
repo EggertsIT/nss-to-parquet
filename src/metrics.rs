@@ -563,19 +563,46 @@ pub struct TrendPoint {
 struct MetricsState {
     metrics: Arc<Metrics>,
     settings: StatsSettings,
+    schema: Arc<SchemaOverview>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SchemaOverview {
+    pub schema_path: String,
+    pub time_field: String,
+    pub time_format: String,
+    pub timezone: String,
+    pub strict_type_validation: bool,
+    pub field_count: usize,
+    pub fields: Vec<SchemaFieldOverview>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SchemaFieldOverview {
+    pub index: usize,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub logical_type: String,
+    pub nullable: bool,
 }
 
 pub async fn run_metrics_server(
     bind_addr: String,
     metrics: Arc<Metrics>,
     settings: StatsSettings,
+    schema: SchemaOverview,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
-    let state = MetricsState { metrics, settings };
+    let state = MetricsState {
+        metrics,
+        settings,
+        schema: Arc::new(schema),
+    };
 
     let mut app = Router::new()
         .route("/metrics", get(metrics_handler))
         .route("/api/stats", get(stats_handler))
+        .route("/api/schema", get(schema_handler))
         .with_state(state.clone());
 
     if state.settings.dashboard_enabled {
@@ -603,6 +630,10 @@ async fn stats_handler(State(state): State<MetricsState>) -> Json<StatsResponse>
     Json(state.metrics.snapshot(&state.settings))
 }
 
+async fn schema_handler(State(state): State<MetricsState>) -> Json<SchemaOverview> {
+    Json((*state.schema).clone())
+}
+
 async fn dashboard_handler() -> Html<&'static str> {
     Html(DASHBOARD_HTML)
 }
@@ -628,6 +659,10 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
     .status.ok { background:var(--ok); } .status.degraded { background:var(--warn); } .status.critical { background:var(--crit); }
     canvas { width:100%; height:120px; }
     ul { margin:0; padding-left:16px; }
+    table { width:100%; border-collapse: collapse; margin-top:8px; font-size:12px; }
+    th, td { border-bottom: 1px solid var(--line); text-align:left; padding:6px 8px; vertical-align: top; }
+    th { color:#4c6176; text-transform: uppercase; font-size:11px; letter-spacing: .03em; }
+    td.type { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   </style>
 </head>
 <body>
@@ -656,6 +691,16 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
       <ul id="reasons"></ul>
       <div class="muted" id="freshness"></div>
     </section>
+    <section class="card">
+      <div class="label">Schema Overview</div>
+      <div class="muted" id="schemaMeta">loading...</div>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Field</th><th>Type</th><th>Nullable</th></tr>
+        </thead>
+        <tbody id="schemaRows"></tbody>
+      </table>
+    </section>
   </main>
   <script>
     const byId = (id) => document.getElementById(id);
@@ -681,6 +726,21 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       });
       ctx.stroke();
+    }
+
+    async function loadSchema() {
+      const res = await fetch('/api/schema', { cache: 'no-store' });
+      const s = await res.json();
+      byId('schemaMeta').textContent =
+        `${s.field_count} fields | path: ${s.schema_path} | time_field: ${s.time_field} | timezone: ${s.timezone} | strict_type_validation: ${s.strict_type_validation}`;
+
+      const rows = byId('schemaRows');
+      rows.innerHTML = '';
+      (s.fields || []).forEach((f) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${f.index}</td><td>${f.name}</td><td class="type">${f.type}</td><td>${f.nullable ? 'true' : 'false'}</td>`;
+        rows.appendChild(tr);
+      });
     }
 
     async function refresh() {
@@ -713,6 +773,7 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
       drawSeries('c4', s.trends, 'dlq', '#c62828');
     }
 
+    loadSchema().catch(console.error);
     refresh().catch(console.error);
     setInterval(() => refresh().catch(console.error), 5000);
   </script>
