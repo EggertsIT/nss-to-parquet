@@ -443,10 +443,22 @@ curl -s http://127.0.0.1:9090/metrics | head
 curl -s http://127.0.0.1:9090/api/stats
 ```
 
-Open dashboard locally:
+Open dashboard on the server (desktop session only):
 
 ```bash
 xdg-open http://127.0.0.1:9090/dashboard
+```
+
+Access dashboard from your laptop (recommended for headless servers):
+
+```bash
+ssh -L 9090:127.0.0.1:9090 admin@<server-host-or-ip>
+```
+
+Then open in your local browser:
+
+```text
+http://127.0.0.1:9090/dashboard
 ```
 
 ### 11. Point Zscaler NSS feed
