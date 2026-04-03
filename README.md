@@ -132,13 +132,35 @@ Run:
 ## Get the Project
 
 ```bash
-git clone git@github.com:EggertsIT/nss-to-parquet.git
+git clone https://github.com/EggertsIT/nss-to-parquet.git
 cd nss-to-parquet
 ```
+
+## Quick Install (One Line)
+
+For `RHEL 9` / `Rocky 9` hosts:
+
+```bash
+git clone https://github.com/EggertsIT/nss-to-parquet.git && cd nss-to-parquet && ./install.sh --install-deps --install-rust
+```
+
+This builds the binary, installs config/schema/systemd service, validates config, and starts `nss-ingestor`.
 
 ## RHEL 9 / Rocky 9 Installation and Setup
 
 This section is a production-style setup for `RHEL 9` and `Rocky Linux 9`.
+
+If Rust is already present and OS dependencies are already installed, you can use:
+
+```bash
+./install.sh
+```
+
+Installer options:
+
+```text
+./install.sh --help
+```
 
 ### 1. Install OS dependencies
 
