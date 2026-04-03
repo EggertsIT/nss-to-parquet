@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct AppConfig {
     pub listener: ListenerConfig,
@@ -43,7 +43,7 @@ impl AppConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ListenerConfig {
     pub bind_addr: String,
@@ -67,7 +67,7 @@ impl Default for ListenerConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SchemaConfig {
     pub path: PathBuf,
@@ -89,7 +89,7 @@ impl Default for SchemaConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct WriterConfig {
     pub output_dir: PathBuf,
@@ -111,7 +111,7 @@ impl Default for WriterConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DlqConfig {
     pub path: PathBuf,
@@ -127,7 +127,7 @@ impl Default for DlqConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RetentionConfig {
     pub enabled: bool,
@@ -145,7 +145,7 @@ impl Default for RetentionConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct MetricsConfig {
     pub enabled: bool,
@@ -173,7 +173,7 @@ impl Default for MetricsConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DurabilityConfig {
     pub enabled: bool,

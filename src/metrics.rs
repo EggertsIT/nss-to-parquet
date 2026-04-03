@@ -809,6 +809,7 @@ struct MetricsState {
     metrics: Arc<Metrics>,
     settings: StatsSettings,
     schema: Arc<SchemaOverview>,
+    config: Arc<ConfigOverview>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -831,23 +832,32 @@ pub struct SchemaFieldOverview {
     pub nullable: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigOverview {
+    pub config_path: String,
+    pub resolved_config: serde_json::Value,
+}
+
 pub async fn run_metrics_server(
     bind_addr: String,
     metrics: Arc<Metrics>,
     settings: StatsSettings,
     schema: SchemaOverview,
+    config: ConfigOverview,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let state = MetricsState {
         metrics,
         settings,
         schema: Arc::new(schema),
+        config: Arc::new(config),
     };
 
     let mut app = Router::new()
         .route("/metrics", get(metrics_handler))
         .route("/api/stats", get(stats_handler))
         .route("/api/schema", get(schema_handler))
+        .route("/api/config", get(config_handler))
         .with_state(state.clone());
 
     if state.settings.dashboard_enabled {
@@ -879,6 +889,10 @@ async fn schema_handler(State(state): State<MetricsState>) -> Json<SchemaOvervie
     Json((*state.schema).clone())
 }
 
+async fn config_handler(State(state): State<MetricsState>) -> Json<ConfigOverview> {
+    Json((*state.config).clone())
+}
+
 async fn dashboard_handler() -> Html<&'static str> {
     Html(DASHBOARD_HTML)
 }
@@ -908,6 +922,7 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
     th, td { border-bottom: 1px solid var(--line); text-align:left; padding:6px 8px; vertical-align: top; }
     th { color:#4c6176; text-transform: uppercase; font-size:11px; letter-spacing: .03em; }
     td.type { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    pre { margin:8px 0 0 0; padding:10px; border:1px solid var(--line); border-radius:8px; background:#f8fbff; overflow:auto; max-height:320px; font-size:12px; }
   </style>
 </head>
 <body>
@@ -955,6 +970,11 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
         <tbody id="schemaRows"></tbody>
       </table>
     </section>
+    <section class="card">
+      <div class="label">Active Config</div>
+      <div class="muted" id="configMeta">loading...</div>
+      <pre id="configBody"></pre>
+    </section>
   </main>
   <script>
     const byId = (id) => document.getElementById(id);
@@ -1000,6 +1020,13 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
         tr.innerHTML = `<td>${f.index}</td><td>${f.name}</td><td class="type">${f.type}</td><td>${f.nullable ? 'true' : 'false'}</td>`;
         rows.appendChild(tr);
       });
+    }
+
+    async function loadConfig() {
+      const res = await fetch('/api/config', { cache: 'no-store' });
+      const c = await res.json();
+      byId('configMeta').textContent = `source: ${c.config_path}`;
+      byId('configBody').textContent = JSON.stringify(c.resolved_config, null, 2);
     }
 
     async function refresh() {
@@ -1054,6 +1081,7 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
     }
 
     loadSchema().catch(console.error);
+    loadConfig().catch(console.error);
     refresh().catch(console.error);
     setInterval(() => refresh().catch(console.error), 5000);
   </script>

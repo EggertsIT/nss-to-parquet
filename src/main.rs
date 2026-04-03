@@ -22,7 +22,7 @@ use crate::config::AppConfig;
 use crate::dlq::run_dlq_writer;
 use crate::durability::Durability;
 use crate::metrics::{
-    Metrics, SchemaFieldOverview, SchemaOverview, StatsSettings, run_metrics_server,
+    ConfigOverview, Metrics, SchemaFieldOverview, SchemaOverview, StatsSettings, run_metrics_server,
 };
 use crate::parser::{ParserCtx, run_parser_loop};
 use crate::retention::run_retention_loop;
@@ -119,6 +119,10 @@ async fn run(config_path: PathBuf) -> Result<()> {
         cfg.metrics.stats_window_hours.max(1),
         Some(metrics_state_path),
     ));
+    let config_overview = ConfigOverview {
+        config_path: config_path.display().to_string(),
+        resolved_config: serde_json::to_value(&cfg).context("failed to serialize config")?,
+    };
     let schema_overview = SchemaOverview {
         schema_path: cfg.schema.path.display().to_string(),
         time_field: cfg.schema.time_field.clone(),
@@ -156,10 +160,18 @@ async fn run(config_path: PathBuf) -> Result<()> {
             critical_stale_seconds: cfg.metrics.critical_stale_seconds,
         };
         let schema_overview = schema_overview.clone();
+        let config_overview = config_overview.clone();
         let shutdown = shutdown_rx.clone();
         Some(tokio::spawn(async move {
-            if let Err(err) =
-                run_metrics_server(addr, metrics, settings, schema_overview, shutdown).await
+            if let Err(err) = run_metrics_server(
+                addr,
+                metrics,
+                settings,
+                schema_overview,
+                config_overview,
+                shutdown,
+            )
+            .await
             {
                 error!(error = %err, "metrics server exited with error");
             }

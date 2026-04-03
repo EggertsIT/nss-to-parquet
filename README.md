@@ -576,6 +576,12 @@ Schema overview API (active schema loaded by service):
 GET /api/schema
 ```
 
+Config overview API (active resolved config loaded by service):
+
+```text
+GET /api/config
+```
+
 Built-in dashboard (if `metrics.dashboard_enabled = true`):
 
 ```text
@@ -606,6 +612,7 @@ Exposed counters:
 - dashboard trend graphs for both past 24h and past 1h
 - restart metadata (`count_24h`, `last_restart_at`, restart `events`)
 - `/dashboard` includes a schema overview table sourced from `/api/schema`
+- `/dashboard` includes active config visibility sourced from `/api/config`
 - `/dashboard` marks service restarts in the current 24h window
 
 ## DuckDB Query Examples
