@@ -261,7 +261,7 @@ install_layout() {
   local tmp_cfg tmp_unit
   tmp_cfg="$(mktemp)"
   tmp_unit="$(mktemp)"
-  trap 'rm -f "$tmp_cfg" "$tmp_unit"' EXIT
+  trap "rm -f '$tmp_cfg' '$tmp_unit'" EXIT
 
   write_config_template "$tmp_cfg"
   install_or_stage "$tmp_cfg" "${CONFIG_DIR}/config.toml" 0640 root "$SERVICE_GROUP"
