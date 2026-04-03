@@ -73,38 +73,99 @@ Or run on a high port (example `5514`) and use network forwarding.
 
 Use [config.example.toml](./config.example.toml) and [schema.example.yaml](./schema.example.yaml) as templates.
 
-### `config.toml` sections
+### How configuration is applied
 
-- `[listener]`: bind address, max line size, channel capacities
-- `[schema]`: schema path, time field name, time format, timezone
-- `[writer]`: output directory, batch/flush/rotation settings, compression
-- `[dlq]`: DLQ directory and queue capacity
-- `[retention]`: enable/disable, local days, sweep interval
-- `[metrics]`: metrics/admin bind address and dashboard/health thresholds
-- `[durability]`: local spool and replay settings
+- Config is loaded at process start.
+- There is no hot-reload today. After changing `config.toml` or `schema.yaml`, restart the service.
+- Relative paths are resolved relative to the config file location.
 
-Important `[listener]` keys:
+### `config.toml` deep dive
 
-- `max_connections` (drop new connections above this limit)
-- `read_timeout_secs` (idle connection timeout)
+#### `[listener]`
 
-Important `[metrics]` keys:
+Ingress TCP behavior and backpressure entrypoint.
 
-- `dashboard_enabled` (default `false` in app config; installer template sets it to `true`)
-- `stats_window_hours` (default `24`)
-- `degraded_error_ratio` / `critical_error_ratio`
-- `degraded_stale_seconds` / `critical_stale_seconds`
+- `bind_addr`: Listener address/port (example `0.0.0.0:514` or `127.0.0.1:5514`)
+- `max_line_bytes`: Drops oversized lines to DLQ with parse error metric
+- `read_timeout_secs`: Idle connection timeout; stale senders are disconnected
+- `max_connections`: Hard cap of concurrent TCP connections; new ones are dropped beyond this
+- `ingress_channel_capacity`: Buffer from listener -> parser
+- `parsed_channel_capacity`: Buffer from parser -> parquet writer
 
-Important `[schema]` key:
+Tuning guidance:
+- Increase channel capacities if short bursts are dropped.
+- Increase `max_connections` only if sender fan-in is high and host resources allow it.
+- Keep `read_timeout_secs` low enough to clean dead sockets.
 
-- `strict_type_validation` (default `true`)
+#### `[schema]`
 
-Important `[durability]` keys:
+How raw feed columns are mapped and typed.
 
-- `enabled` (default `true`)
-- `path` (local spool directory)
-- `fsync_every` (durability/throughput tradeoff; lower is safer, higher is faster)
-- `max_log_bytes` (trigger compaction when spool log exceeds this size)
+- `path`: Schema YAML path
+- `time_field`: Field name used as event time for partitioning
+- `time_format`: Chrono parse format for non-epoch timestamps
+- `timezone`: Parse timezone (must match NSS feed timezone)
+- `strict_type_validation`: If `true`, invalid typed values go to DLQ
+
+Operational note:
+- If NSS feed output order changes, regenerate/update schema before production traffic.
+
+#### `[writer]`
+
+Parquet write shape and throughput/latency behavior.
+
+- `output_dir`: Root parquet directory
+- `batch_rows`: Rows per in-memory batch before write
+- `flush_interval_secs`: Time-based flush interval
+- `target_file_rows`: Rotate parquet file around this row count
+- `compression`: `zstd` (recommended) or other supported codec
+
+Tuning guidance:
+- Higher `batch_rows` improves throughput but increases memory and flush latency.
+- Higher `target_file_rows` reduces file count but increases single-file size.
+
+#### `[dlq]`
+
+Dead-letter handling for malformed or invalid records.
+
+- `path`: DLQ output directory
+- `channel_capacity`: Buffer for DLQ writer
+
+#### `[retention]`
+
+Automatic local parquet cleanup.
+
+- `enabled`: Enable local retention sweeps
+- `local_days`: Keep this many days of partitions
+- `sweep_interval_secs`: Retention scan interval
+
+#### `[metrics]`
+
+Observability API and health thresholds.
+
+- `enabled`: Expose HTTP metrics/stats endpoints
+- `bind_addr`: Metrics server address
+- `dashboard_enabled`: Enable `/dashboard` UI
+- `stats_window_hours`: In-memory trend horizon
+- `degraded_error_ratio` / `critical_error_ratio`: Error ratio thresholds
+- `degraded_stale_seconds` / `critical_stale_seconds`: Ingest staleness thresholds
+
+Defaults:
+- App default for `dashboard_enabled` is `false`.
+- Installer-generated config sets `dashboard_enabled = true`.
+
+#### `[durability]`
+
+Crash/restart safety for at-least-once ingestion.
+
+- `enabled`: Enable local spool + replay
+- `path`: Durability spool directory
+- `fsync_every`: Lower is safer (more fsync), higher is faster
+- `max_log_bytes`: Triggers compaction when spool grows large
+
+Semantics:
+- Enabled: at-least-once delivery.
+- Disabled: best-effort delivery.
 
 ### `schema.yaml` requirements
 
@@ -114,6 +175,30 @@ Important `[durability]` keys:
   - `type` (`string`, `int64`, `float64`, `boolean`, `timestamp`, `ip`)
   - optional `nullable` (default `true`)
 - The configured `time_field` must exist in schema and be parseable with `time_format` and `timezone`.
+
+### Changing config on a running service
+
+Safe production workflow (`systemd` deployment):
+
+```bash
+sudo cp /etc/nss-ingestor/config.toml /etc/nss-ingestor/config.toml.bak.$(date +%Y%m%d%H%M%S)
+sudoedit /etc/nss-ingestor/config.toml
+sudo -u nssingestor /usr/local/bin/nss-ingestor validate-config --config /etc/nss-ingestor/config.toml
+sudo systemctl restart nss-ingestor
+sudo systemctl status nss-ingestor --no-pager
+curl -s http://127.0.0.1:9090/api/stats
+```
+
+If restart fails:
+
+```bash
+sudo cp /etc/nss-ingestor/config.toml.bak.<timestamp> /etc/nss-ingestor/config.toml
+sudo systemctl restart nss-ingestor
+```
+
+When changing schema:
+- Validate before restart.
+- Prefer writing new data to a new output path or date boundary to avoid mixing parquet schemas in one query path.
 
 ## Build and Run
 
