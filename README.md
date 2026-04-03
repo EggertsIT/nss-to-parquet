@@ -107,6 +107,10 @@ How raw feed columns are mapped and typed.
 - `timezone`: Parse timezone (must match NSS feed timezone)
 - `strict_type_validation`: If `true`, invalid typed values go to DLQ
 
+Validation behavior:
+- `nullable: false` fields are always enforced and rejected to DLQ when empty/`None`/`N/A`.
+- Type validation is additionally enforced when `strict_type_validation = true`.
+
 Operational note:
 - If NSS feed output order changes, regenerate/update schema before production traffic.
 
@@ -120,6 +124,9 @@ Parquet write shape and throughput/latency behavior.
 - `target_file_rows`: Rotate parquet file around this row count
 - `compression`: `zstd` (recommended) or other supported codec
 
+Startup behavior:
+- Orphan `.parquet.tmp` files from prior unclean shutdowns are removed at startup.
+
 Tuning guidance:
 - Higher `batch_rows` improves throughput but increases memory and flush latency.
 - Higher `target_file_rows` reduces file count but increases single-file size.
@@ -130,6 +137,8 @@ Dead-letter handling for malformed or invalid records.
 
 - `path`: DLQ output directory
 - `channel_capacity`: Buffer for DLQ writer
+- `local_days`: Keep DLQ log files for this many days
+- `sweep_interval_secs`: DLQ retention scan interval
 
 #### `[retention]`
 
@@ -341,6 +350,8 @@ output_dir = "/var/lib/nss-ingestor/data"
 
 [dlq]
 path = "/var/lib/nss-ingestor/dlq"
+local_days = 14
+sweep_interval_secs = 3600
 
 [durability]
 enabled = true
@@ -544,6 +555,8 @@ dlq/
   dlq-2026-04-03.log
 ```
 
+DLQ retention is controlled by `[dlq].local_days` and `[dlq].sweep_interval_secs`.
+
 DLQ line format:
 
 ```text
@@ -647,9 +660,11 @@ LIMIT 50;
 
 - With `[durability].enabled = true`, delivery semantics are **at-least-once**.
 - If durability is disabled, semantics are **best-effort**.
+- Critical worker failures (listener/parser/writer/dlq/metrics) cause process exit so `systemd` restart can recover.
 - Keep schema synchronized with NSS feed template changes.
 - Tune `batch_rows` and `target_file_rows` to balance write throughput vs file size.
 - Keep retention enabled to avoid unbounded local disk growth.
+- Keep DLQ retention enabled (`[dlq].local_days > 0`) to avoid unbounded DLQ growth.
 - Service handles `SIGTERM` (for `systemctl restart/stop`) and performs graceful writer shutdown/finalize.
 
 ## Troubleshooting

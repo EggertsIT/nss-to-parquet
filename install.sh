@@ -171,6 +171,8 @@ compression = "zstd"
 [dlq]
 path = "${STATE_DIR}/dlq"
 channel_capacity = 20000
+local_days = 14
+sweep_interval_secs = 3600
 
 [retention]
 enabled = true

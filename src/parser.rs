@@ -103,6 +103,8 @@ pub fn parse_record(
         .map(|value| normalize_field(&value))
         .collect::<Vec<_>>();
 
+    validate_required_values(schema, &values)?;
+
     if cfg.schema.strict_type_validation {
         validate_typed_values(schema, &values, cfg)?;
     }
@@ -142,6 +144,18 @@ fn normalize_field(value: &str) -> Option<String> {
     } else {
         Some(value.to_string())
     }
+}
+
+fn validate_required_values(schema: &SchemaDef, values: &[Option<String>]) -> anyhow::Result<()> {
+    for (idx, field) in schema.fields.iter().enumerate() {
+        if !field.nullable && values[idx].is_none() {
+            anyhow::bail!(
+                "field '{}' is non-nullable but value was empty/None",
+                field.name
+            );
+        }
+    }
+    Ok(())
 }
 
 fn validate_typed_values(
@@ -332,5 +346,36 @@ mod tests {
         let parsed = parse_record(&raw, &schema, &cfg).expect("parsed");
         assert_eq!(parsed.values.len(), 2);
         assert_eq!(parsed.values[1], Some("Blocked".to_string()));
+    }
+
+    #[test]
+    fn parse_record_rejects_non_nullable_empty_value() {
+        let schema = SchemaDef {
+            fields: vec![
+                FieldDef {
+                    name: "time".to_string(),
+                    logical_type: LogicalType::Timestamp,
+                    nullable: false,
+                },
+                FieldDef {
+                    name: "action".to_string(),
+                    logical_type: LogicalType::String,
+                    nullable: false,
+                },
+            ],
+        };
+
+        let cfg = AppConfig::default();
+        let raw = RawRecord {
+            line: "\"Mon Jun 20 15:29:11 2022\",\"None\"".to_string(),
+            peer_addr: None,
+            received_at: Utc::now(),
+            spool_seq: None,
+        };
+        let err =
+            parse_record(&raw, &schema, &cfg).expect_err("should reject null for non-nullable");
+        let msg = err.to_string();
+        assert!(msg.contains("non-nullable"));
+        assert!(msg.contains("action"));
     }
 }

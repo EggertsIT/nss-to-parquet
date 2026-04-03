@@ -49,6 +49,10 @@ pub async fn run_parquet_writer(
             cfg.writer.output_dir.display()
         )
     })?;
+    let removed_tmp = cleanup_orphan_parquet_tmp_files(&cfg.writer.output_dir)?;
+    if removed_tmp > 0 {
+        info!(removed_tmp, "cleaned orphan parquet temp files at startup");
+    }
 
     let event_time_idx = schema
         .field_index(&cfg.schema.time_field)
@@ -339,6 +343,43 @@ fn compression_from_str(input: &str) -> Result<Compression> {
     }
 }
 
+fn cleanup_orphan_parquet_tmp_files(output_dir: &Path) -> Result<u64> {
+    if !output_dir.exists() {
+        return Ok(0);
+    }
+
+    let mut removed = 0_u64;
+    let mut stack = vec![output_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)
+            .with_context(|| format!("failed to list directory {}", dir.display()))?
+        {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                stack.push(entry.path());
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.ends_with(".parquet.tmp") {
+                std::fs::remove_file(entry.path()).with_context(|| {
+                    format!(
+                        "failed removing orphan parquet temp {}",
+                        entry.path().display()
+                    )
+                })?;
+                removed += 1;
+            }
+        }
+    }
+
+    Ok(removed)
+}
+
 fn parse_i64(value: Option<&str>) -> Option<i64> {
     value.and_then(|v| v.parse::<i64>().ok())
 }
@@ -376,6 +417,8 @@ fn parse_timestamp_micros(value: Option<&str>) -> Option<i64> {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn partition_path_format() {
@@ -384,5 +427,21 @@ mod tests {
             .single()
             .unwrap();
         assert_eq!(partition_key(dt), "dt=2026-04-03/hour=12");
+    }
+
+    #[test]
+    fn cleanup_orphan_tmp_files_removes_temp_files() {
+        let dir = tempdir().unwrap();
+        let partition = dir.path().join("dt=2026-04-03").join("hour=12");
+        fs::create_dir_all(&partition).unwrap();
+        let tmp = partition.join(".part-000001.parquet.tmp");
+        let final_file = partition.join("part-000001.parquet");
+        fs::write(&tmp, b"partial").unwrap();
+        fs::write(&final_file, b"done").unwrap();
+
+        let removed = cleanup_orphan_parquet_tmp_files(dir.path()).unwrap();
+        assert_eq!(removed, 1);
+        assert!(!tmp.exists());
+        assert!(final_file.exists());
     }
 }

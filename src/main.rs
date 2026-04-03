@@ -149,7 +149,7 @@ async fn run(config_path: PathBuf) -> Result<()> {
         mpsc::channel::<ParsedRecord>(cfg.listener.parsed_channel_capacity);
     let (dlq_tx, dlq_rx) = mpsc::channel::<DlqRecord>(cfg.dlq.channel_capacity);
 
-    let metrics_task = if cfg.metrics.enabled {
+    let mut metrics_task = if cfg.metrics.enabled {
         let addr = cfg.metrics.bind_addr.clone();
         let metrics = Arc::clone(&metrics);
         let settings = StatsSettings {
@@ -163,7 +163,7 @@ async fn run(config_path: PathBuf) -> Result<()> {
         let config_overview = config_overview.clone();
         let shutdown = shutdown_rx.clone();
         Some(tokio::spawn(async move {
-            if let Err(err) = run_metrics_server(
+            run_metrics_server(
                 addr,
                 metrics,
                 settings,
@@ -172,9 +172,6 @@ async fn run(config_path: PathBuf) -> Result<()> {
                 shutdown,
             )
             .await
-            {
-                error!(error = %err, "metrics server exited with error");
-            }
         }))
     } else {
         None
@@ -183,10 +180,8 @@ async fn run(config_path: PathBuf) -> Result<()> {
     let dlq_cfg = cfg.dlq.clone();
     let dlq_metrics = Arc::clone(&metrics);
     let mut dlq_shutdown = shutdown_rx.clone();
-    let dlq_task = tokio::spawn(async move {
-        if let Err(err) = run_dlq_writer(dlq_cfg, dlq_rx, dlq_metrics, &mut dlq_shutdown).await {
-            error!(error = %err, "dlq writer exited with error");
-        }
+    let mut dlq_task = tokio::spawn(async move {
+        run_dlq_writer(dlq_cfg, dlq_rx, dlq_metrics, &mut dlq_shutdown).await
     });
 
     let parser_schema = Arc::clone(&schema);
@@ -201,7 +196,7 @@ async fn run(config_path: PathBuf) -> Result<()> {
         durability: parser_durability,
     };
     let mut parser_shutdown = shutdown_rx.clone();
-    let parser_task = tokio::spawn(async move {
+    let mut parser_task = tokio::spawn(async move {
         run_parser_loop(
             raw_rx,
             parsed_tx,
@@ -210,6 +205,7 @@ async fn run(config_path: PathBuf) -> Result<()> {
             &mut parser_shutdown,
         )
         .await;
+        Ok::<(), anyhow::Error>(())
     });
 
     let writer_cfg = cfg.clone();
@@ -217,8 +213,8 @@ async fn run(config_path: PathBuf) -> Result<()> {
     let writer_metrics = Arc::clone(&metrics);
     let writer_durability = durability.clone();
     let mut writer_shutdown = shutdown_rx.clone();
-    let writer_task = tokio::spawn(async move {
-        if let Err(err) = run_parquet_writer(
+    let mut writer_task = tokio::spawn(async move {
+        run_parquet_writer(
             writer_cfg,
             writer_schema,
             parsed_rx,
@@ -227,18 +223,14 @@ async fn run(config_path: PathBuf) -> Result<()> {
             &mut writer_shutdown,
         )
         .await
-        {
-            error!(error = %err, "parquet writer exited with error");
-        }
     });
 
     let retention_cfg = cfg.clone();
     let mut retention_shutdown = shutdown_rx.clone();
-    let retention_task = tokio::spawn(async move {
-        if let Err(err) = run_retention_loop(retention_cfg, &mut retention_shutdown).await {
-            error!(error = %err, "retention loop exited with error");
-        }
-    });
+    let retention_task =
+        tokio::spawn(
+            async move { run_retention_loop(retention_cfg, &mut retention_shutdown).await },
+        );
 
     if let Some(durability) = durability.as_ref() {
         let replay = durability.replay_uncommitted()?;
@@ -274,65 +266,178 @@ async fn run(config_path: PathBuf) -> Result<()> {
         )
         .await
     });
+    let mut fatal_error: Option<anyhow::Error> = None;
+    let mut listener_finished = false;
+    let mut writer_finished = false;
+    let mut dlq_finished = false;
+    let mut parser_finished = false;
+    let mut metrics_finished = false;
 
     #[cfg(unix)]
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .context("failed to register SIGTERM handler")?;
 
     #[cfg(unix)]
-    let listener_finished = tokio::select! {
+    tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             info!(signal = "SIGINT", "received shutdown signal");
-            false
         }
         _ = sigterm.recv() => {
             info!(signal = "SIGTERM", "received shutdown signal");
-            false
         }
         result = &mut listener_task => {
-            match result {
-                Ok(Ok(())) => info!("listener exited cleanly"),
-                Ok(Err(err)) => error!(error = %err, "listener exited with error"),
-                Err(join_err) => error!(error = %join_err, "listener task join error"),
+            listener_finished = true;
+            match join_task("listener", result) {
+                Ok(()) => set_first_error(&mut fatal_error, anyhow::anyhow!("listener stopped unexpectedly")),
+                Err(err) => set_first_error(&mut fatal_error, err),
             }
-            true
         }
-    };
+        result = &mut writer_task => {
+            writer_finished = true;
+            match join_task("parquet writer", result) {
+                Ok(()) => set_first_error(&mut fatal_error, anyhow::anyhow!("parquet writer stopped unexpectedly")),
+                Err(err) => set_first_error(&mut fatal_error, err),
+            }
+        }
+        result = &mut dlq_task => {
+            dlq_finished = true;
+            match join_task("dlq writer", result) {
+                Ok(()) => set_first_error(&mut fatal_error, anyhow::anyhow!("dlq writer stopped unexpectedly")),
+                Err(err) => set_first_error(&mut fatal_error, err),
+            }
+        }
+        result = &mut parser_task => {
+            parser_finished = true;
+            match join_task("parser", result) {
+                Ok(()) => set_first_error(&mut fatal_error, anyhow::anyhow!("parser stopped unexpectedly")),
+                Err(err) => set_first_error(&mut fatal_error, err),
+            }
+        }
+        maybe_metrics_result = async {
+            if let Some(task) = &mut metrics_task {
+                Some(task.await)
+            } else {
+                None
+            }
+        }, if metrics_task.is_some() => {
+            metrics_finished = true;
+            if let Some(result) = maybe_metrics_result {
+                match join_task("metrics server", result) {
+                    Ok(()) => set_first_error(&mut fatal_error, anyhow::anyhow!("metrics server stopped unexpectedly")),
+                    Err(err) => set_first_error(&mut fatal_error, err),
+                }
+            }
+        }
+    }
 
     #[cfg(not(unix))]
-    let listener_finished = tokio::select! {
+    tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             info!(signal = "SIGINT", "received shutdown signal");
-            false
         }
         result = &mut listener_task => {
-            match result {
-                Ok(Ok(())) => info!("listener exited cleanly"),
-                Ok(Err(err)) => error!(error = %err, "listener exited with error"),
-                Err(join_err) => error!(error = %join_err, "listener task join error"),
+            listener_finished = true;
+            match join_task("listener", result) {
+                Ok(()) => set_first_error(&mut fatal_error, anyhow::anyhow!("listener stopped unexpectedly")),
+                Err(err) => set_first_error(&mut fatal_error, err),
             }
-            true
         }
-    };
+        result = &mut writer_task => {
+            writer_finished = true;
+            match join_task("parquet writer", result) {
+                Ok(()) => set_first_error(&mut fatal_error, anyhow::anyhow!("parquet writer stopped unexpectedly")),
+                Err(err) => set_first_error(&mut fatal_error, err),
+            }
+        }
+        result = &mut dlq_task => {
+            dlq_finished = true;
+            match join_task("dlq writer", result) {
+                Ok(()) => set_first_error(&mut fatal_error, anyhow::anyhow!("dlq writer stopped unexpectedly")),
+                Err(err) => set_first_error(&mut fatal_error, err),
+            }
+        }
+        result = &mut parser_task => {
+            parser_finished = true;
+            match join_task("parser", result) {
+                Ok(()) => set_first_error(&mut fatal_error, anyhow::anyhow!("parser stopped unexpectedly")),
+                Err(err) => set_first_error(&mut fatal_error, err),
+            }
+        }
+        maybe_metrics_result = async {
+            if let Some(task) = &mut metrics_task {
+                Some(task.await)
+            } else {
+                None
+            }
+        }, if metrics_task.is_some() => {
+            metrics_finished = true;
+            if let Some(result) = maybe_metrics_result {
+                match join_task("metrics server", result) {
+                    Ok(()) => set_first_error(&mut fatal_error, anyhow::anyhow!("metrics server stopped unexpectedly")),
+                    Err(err) => set_first_error(&mut fatal_error, err),
+                }
+            }
+        }
+    }
 
     let _ = shutdown_tx.send(true);
 
-    if let Some(task) = metrics_task {
-        let _ = task.await;
+    if !listener_finished && let Err(err) = join_task("listener", listener_task.await) {
+        set_first_error(&mut fatal_error, err);
     }
-    if !listener_finished {
-        let _ = listener_task.await;
+    if !writer_finished && let Err(err) = join_task("parquet writer", writer_task.await) {
+        set_first_error(&mut fatal_error, err);
     }
-    let _ = parser_task.await;
-    let _ = writer_task.await;
-    let _ = retention_task.await;
-    let _ = dlq_task.await;
+    if !dlq_finished && let Err(err) = join_task("dlq writer", dlq_task.await) {
+        set_first_error(&mut fatal_error, err);
+    }
+    if !parser_finished && let Err(err) = join_task("parser", parser_task.await) {
+        set_first_error(&mut fatal_error, err);
+    }
+    if !metrics_finished
+        && let Some(task) = metrics_task
+        && let Err(err) = join_task("metrics server", task.await)
+    {
+        set_first_error(&mut fatal_error, err);
+    }
+    if let Err(err) = join_task("retention", retention_task.await) {
+        set_first_error(&mut fatal_error, err);
+    }
     if let Err(err) = metrics.persist_now() {
         error!(error = %err, "failed to persist metrics state on shutdown");
     }
 
+    if let Some(err) = fatal_error {
+        error!(error = %err, "shutting down due to worker failure");
+        return Err(err);
+    }
     info!("nss ingestor stopped");
     Ok(())
+}
+
+fn join_task(
+    name: &str,
+    outcome: std::result::Result<Result<()>, tokio::task::JoinError>,
+) -> Result<()> {
+    match outcome {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(err)) => Err(err).with_context(|| format!("{name} failed")),
+        Err(err) => anyhow::bail!("{name} join error: {err}"),
+    }
+}
+
+fn set_first_error(slot: &mut Option<anyhow::Error>, err: anyhow::Error) {
+    let incoming = err.to_string();
+    let incoming_generic = incoming.contains("stopped unexpectedly");
+    match slot {
+        None => *slot = Some(err),
+        Some(existing) => {
+            let existing_generic = existing.to_string().contains("stopped unexpectedly");
+            if existing_generic && !incoming_generic {
+                *slot = Some(err);
+            }
+        }
+    }
 }
 
 fn validate_config(config_path: PathBuf) -> Result<()> {

@@ -116,6 +116,8 @@ impl Default for WriterConfig {
 pub struct DlqConfig {
     pub path: PathBuf,
     pub channel_capacity: usize,
+    pub local_days: i64,
+    pub sweep_interval_secs: u64,
 }
 
 impl Default for DlqConfig {
@@ -123,6 +125,8 @@ impl Default for DlqConfig {
         Self {
             path: PathBuf::from("dlq"),
             channel_capacity: 20_000,
+            local_days: 14,
+            sweep_interval_secs: 3600,
         }
     }
 }

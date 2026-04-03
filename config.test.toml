@@ -20,6 +20,8 @@ compression = "zstd"
 [dlq]
 path = "dlq_test"
 channel_capacity = 1000
+local_days = 14
+sweep_interval_secs = 3600
 
 [retention]
 enabled = false
