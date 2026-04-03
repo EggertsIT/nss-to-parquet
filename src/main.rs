@@ -263,9 +263,34 @@ async fn run(config_path: PathBuf) -> Result<()> {
         .await
     });
 
+    #[cfg(unix)]
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .context("failed to register SIGTERM handler")?;
+
+    #[cfg(unix)]
     let listener_finished = tokio::select! {
         _ = tokio::signal::ctrl_c() => {
-            info!("received shutdown signal");
+            info!(signal = "SIGINT", "received shutdown signal");
+            false
+        }
+        _ = sigterm.recv() => {
+            info!(signal = "SIGTERM", "received shutdown signal");
+            false
+        }
+        result = &mut listener_task => {
+            match result {
+                Ok(Ok(())) => info!("listener exited cleanly"),
+                Ok(Err(err)) => error!(error = %err, "listener exited with error"),
+                Err(join_err) => error!(error = %join_err, "listener task join error"),
+            }
+            true
+        }
+    };
+
+    #[cfg(not(unix))]
+    let listener_finished = tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!(signal = "SIGINT", "received shutdown signal");
             false
         }
         result = &mut listener_task => {

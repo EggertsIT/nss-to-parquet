@@ -641,6 +641,7 @@ LIMIT 50;
 - Keep schema synchronized with NSS feed template changes.
 - Tune `batch_rows` and `target_file_rows` to balance write throughput vs file size.
 - Keep retention enabled to avoid unbounded local disk growth.
+- Service handles `SIGTERM` (for `systemctl restart/stop`) and performs graceful writer shutdown/finalize.
 
 ## Troubleshooting
 
