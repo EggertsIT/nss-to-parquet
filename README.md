@@ -360,6 +360,33 @@ Validate schema and sample lines:
 cargo run -- validate-schema --schema ./schema.yaml --sample ./sample.log
 ```
 
+Benchmark sustained ingest rate:
+
+```bash
+python3 ./scripts/benchmark_ingest.py \
+  --host 127.0.0.1 \
+  --port 514 \
+  --stats-url http://127.0.0.1:9090/api/stats \
+  --line-file ./sample.log \
+  --duration-secs 120 \
+  --connections 16
+```
+
+Targeted-rate benchmark (example 600k logs/min target):
+
+```bash
+python3 ./scripts/benchmark_ingest.py \
+  --host 127.0.0.1 \
+  --port 514 \
+  --stats-url http://127.0.0.1:9090/api/stats \
+  --line-file ./sample.log \
+  --duration-secs 180 \
+  --connections 16 \
+  --target-lpm 600000
+```
+
+The script prints `estimated_safe_sustained_logs_per_min` derived from measured ingest/write deltas.
+
 ## Output Layout
 
 Parquet files are written under `writer.output_dir`:

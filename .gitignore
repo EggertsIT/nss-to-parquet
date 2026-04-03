@@ -9,6 +9,8 @@
 .advisory-db..lock
 .DS_Store
 *.log
+__pycache__/
+*.pyc
 .terraform/
 *.tfstate
 *.tfstate.*
