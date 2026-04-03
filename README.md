@@ -45,9 +45,9 @@ flowchart TD
     K -->|atomic rename| L[Partitioned Parquet dt=.../hour=...]
     J -->|commit max written seq| I
     M[Retention Worker] -->|delete old partitions| L
-    N[Metrics/Stats] --> O[/metrics]
-    N --> P[/api/stats]
-    N --> Q[/dashboard]
+    N[Metrics/Stats] --> O["/metrics"]
+    N --> P["/api/stats"]
+    N --> Q["/dashboard"]
     B --> N
     E --> N
     J --> N
