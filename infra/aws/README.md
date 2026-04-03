@@ -34,6 +34,7 @@ Edit `terraform.tfvars`:
 - Set precise `nss_source_cidrs`
 - Set `repo_url` to your repo if needed
 - Optionally set `allow_metrics_from_admin = true` and `admin_cidrs`
+- If exposing metrics remotely, also set `metrics_bind_addr = "0.0.0.0:9090"` (default is localhost-only)
 
 Apply:
 

@@ -90,7 +90,7 @@ Important `[listener]` keys:
 
 Important `[metrics]` keys:
 
-- `dashboard_enabled` (default `true`)
+- `dashboard_enabled` (default `false` in app config; installer template sets it to `true`)
 - `stats_window_hours` (default `24`)
 - `degraded_error_ratio` / `critical_error_ratio`
 - `degraded_stale_seconds` / `critical_stale_seconds`
@@ -282,6 +282,14 @@ LimitNOFILE=262144
 NoNewPrivileges=true
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/nss-ingestor
+ReadOnlyPaths=/etc/nss-ingestor
 
 [Install]
 WantedBy=multi-user.target
