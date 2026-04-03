@@ -1,0 +1,46 @@
+[listener]
+bind_addr = "0.0.0.0:514"
+max_line_bytes = 262144
+read_timeout_secs = 30
+max_connections = 1024
+ingress_channel_capacity = 50000
+parsed_channel_capacity = 50000
+
+[schema]
+path = "schema.example.yaml"
+time_field = "time"
+time_format = "%a %b %d %H:%M:%S %Y"
+timezone = "UTC"
+strict_type_validation = true
+
+[writer]
+output_dir = "data"
+batch_rows = 10000
+flush_interval_secs = 5
+target_file_rows = 250000
+compression = "zstd"
+
+[dlq]
+path = "dlq"
+channel_capacity = 20000
+
+[retention]
+enabled = true
+local_days = 14
+sweep_interval_secs = 3600
+
+[metrics]
+enabled = true
+bind_addr = "127.0.0.1:9090"
+dashboard_enabled = false
+stats_window_hours = 24
+degraded_error_ratio = 0.02
+critical_error_ratio = 0.10
+degraded_stale_seconds = 300
+critical_stale_seconds = 900
+
+[durability]
+enabled = true
+path = "spool"
+fsync_every = 100
+max_log_bytes = 536870912

@@ -1,0 +1,70 @@
+fields:
+  - name: time
+    type: timestamp
+    nullable: false
+  - name: location
+    type: string
+  - name: proto
+    type: string
+  - name: url
+    type: string
+  - name: action
+    type: string
+  - name: appname
+    type: string
+  - name: appclass
+    type: string
+  - name: app_risk_score
+    type: int64
+  - name: reqsize
+    type: int64
+  - name: respsize
+    type: int64
+  - name: totalsize
+    type: int64
+  - name: urlclass
+    type: string
+  - name: urlsupercat
+    type: string
+  - name: urlcat
+    type: string
+  - name: urlcatmethod
+    type: string
+  - name: threatname
+    type: string
+  - name: riskscore
+    type: int64
+  - name: malwarecat
+    type: string
+  - name: malwareclass
+    type: string
+  - name: trafficredirectmethod
+    type: string
+  - name: dept
+    type: string
+  - name: cip
+    type: ip
+  - name: sip
+    type: ip
+  - name: reqmethod
+    type: string
+  - name: respcode
+    type: int64
+  - name: ua
+    type: string
+  - name: referer
+    type: string
+  - name: ruletype
+    type: string
+  - name: rulelabel
+    type: string
+  - name: reason
+    type: string
+  - name: ssl_rulename
+    type: string
+  - name: dstip_country
+    type: string
+  - name: srcip_country
+    type: string
+  - name: userlocationname
+    type: string

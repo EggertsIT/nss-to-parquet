@@ -1,0 +1,11 @@
+/target
+/data
+/dlq
+/data_test
+/dlq_test
+/spool
+/spool_test
+.advisory-db/
+.advisory-db..lock
+.DS_Store
+*.log

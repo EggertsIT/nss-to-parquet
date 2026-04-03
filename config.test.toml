@@ -1,0 +1,37 @@
+[listener]
+bind_addr = "127.0.0.1:5514"
+max_line_bytes = 262144
+ingress_channel_capacity = 1000
+parsed_channel_capacity = 1000
+
+[schema]
+path = "schema.example.yaml"
+time_field = "time"
+time_format = "%a %b %d %H:%M:%S %Y"
+timezone = "UTC"
+
+[writer]
+output_dir = "data_test"
+batch_rows = 1
+flush_interval_secs = 1
+target_file_rows = 1000
+compression = "zstd"
+
+[dlq]
+path = "dlq_test"
+channel_capacity = 1000
+
+[retention]
+enabled = false
+local_days = 14
+sweep_interval_secs = 3600
+
+[metrics]
+enabled = false
+bind_addr = "127.0.0.1:9091"
+
+[durability]
+enabled = false
+path = "spool_test"
+fsync_every = 1
+max_log_bytes = 1048576
