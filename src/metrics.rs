@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 use anyhow::Result;
 use axum::extract::State;
-use axum::response::Html;
+use axum::http::StatusCode;
+use axum::response::{Html, IntoResponse};
 use axum::routing::get;
 use axum::{Json, Router};
 use chrono::Utc;
@@ -804,6 +805,19 @@ pub struct TrendPoint {
     pub dlq: u64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct HealthResponse {
+    pub status: String,
+    pub generated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReadinessResponse {
+    pub status: String,
+    pub reasons: Vec<String>,
+    pub generated_at: String,
+}
+
 #[derive(Clone)]
 struct MetricsState {
     metrics: Arc<Metrics>,
@@ -854,6 +868,8 @@ pub async fn run_metrics_server(
     };
 
     let mut app = Router::new()
+        .route("/healthz", get(healthz_handler))
+        .route("/readyz", get(readyz_handler))
         .route("/metrics", get(metrics_handler))
         .route("/api/stats", get(stats_handler))
         .route("/api/schema", get(schema_handler))
@@ -879,6 +895,28 @@ pub async fn run_metrics_server(
 
 async fn metrics_handler(State(state): State<MetricsState>) -> String {
     state.metrics.render_prometheus()
+}
+
+async fn healthz_handler() -> Json<HealthResponse> {
+    Json(HealthResponse {
+        status: "ok".to_string(),
+        generated_at: Utc::now().to_rfc3339(),
+    })
+}
+
+async fn readyz_handler(State(state): State<MetricsState>) -> impl IntoResponse {
+    let snapshot = state.metrics.snapshot(&state.settings);
+    let code = if snapshot.status == "critical" {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
+    };
+    let body = ReadinessResponse {
+        status: snapshot.status,
+        reasons: snapshot.reasons,
+        generated_at: snapshot.generated_at,
+    };
+    (code, Json(body))
 }
 
 async fn stats_handler(State(state): State<MetricsState>) -> Json<StatsResponse> {

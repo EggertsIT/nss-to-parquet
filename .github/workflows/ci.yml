@@ -28,3 +28,9 @@ jobs:
 
       - name: Test
         run: cargo test --all-targets --all-features
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit dependencies
+        run: ./scripts/run_audit.sh

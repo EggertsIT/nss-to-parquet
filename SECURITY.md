@@ -22,3 +22,15 @@ When reporting, include:
 ## Current Assessment
 
 See [pentest.md](./pentest.md) for the latest internal penetration test summary and residual risks.
+
+## Dependency Audit Allowlist Policy
+
+`cargo audit` is enforced in CI with warnings denied.
+
+Temporary advisory exceptions are managed in [`audit-allowlist.txt`](./audit-allowlist.txt) and must include:
+- a documented business/technical reason,
+- an owner responsible for follow-up,
+- a review/removal plan with regular reassessment.
+
+Current exception:
+- `RUSTSEC-2024-0436` (`paste`, transitive via `parquet`)

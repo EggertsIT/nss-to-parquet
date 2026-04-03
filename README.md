@@ -577,6 +577,18 @@ If enabled, scrape:
 GET /metrics
 ```
 
+Liveness probe:
+
+```text
+GET /healthz
+```
+
+Readiness probe (`200` when ready, `503` when critical health):
+
+```text
+GET /readyz
+```
+
 Structured stats API:
 
 ```text
@@ -627,6 +639,43 @@ Exposed counters:
 - `/dashboard` includes a schema overview table sourced from `/api/schema`
 - `/dashboard` includes active config visibility sourced from `/api/config`
 - `/dashboard` marks service restarts in the current 24h window
+
+## Dependency Audit Policy
+
+- CI runs `cargo audit` with `--deny warnings`.
+- Temporary exceptions are tracked in [`audit-allowlist.txt`](./audit-allowlist.txt).
+- Update allowlist entries only with explicit risk acceptance and periodic review.
+- Local command:
+
+```bash
+./scripts/run_audit.sh
+```
+
+## Release Artifacts (SBOM + Signed Checksums)
+
+On tag pushes matching `v*`, GitHub Actions workflow [`release-artifacts.yml`](./.github/workflows/release-artifacts.yml) publishes:
+
+- `nss-ingestor-linux-x86_64`
+- `checksums.txt` (SHA-256)
+- `checksums.txt.sig` + `checksums.txt.pem` (cosign keyless signature + certificate)
+- `sbom.cdx.json` (CycloneDX SBOM via Syft)
+
+Verify downloaded binary hash:
+
+```bash
+sha256sum -c checksums.txt
+```
+
+Verify signed checksums:
+
+```bash
+cosign verify-blob \
+  --certificate checksums.txt.pem \
+  --signature checksums.txt.sig \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp "https://github.com/.+/.+/.github/workflows/release-artifacts.yml@refs/tags/.+" \
+  checksums.txt
+```
 
 ## DuckDB Query Examples
 

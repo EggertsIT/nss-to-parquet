@@ -1,0 +1,6 @@
+# Cargo audit allowlist for accepted temporary exceptions.
+# Policy:
+# - Each ID requires an owner, reason, and review date in SECURITY.md.
+# - Keep this list minimal and remove entries as soon as upstream fixes land.
+
+RUSTSEC-2024-0436
