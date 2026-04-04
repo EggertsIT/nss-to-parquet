@@ -2,6 +2,17 @@
 
 `nss-ingestor` is a Rust service that ingests Zscaler NSS web logs over TCP and writes partitioned Parquet files for fast local analytics (DuckDB-first).
 
+## License and Commercial Use
+
+This project is source-available under `BUSL-1.1` (Business Source License), not OSI open source.
+
+- License terms: `LICENSE`
+- Commercial subscription terms: `COMMERCIAL_LICENSE.md`
+
+Production/commercial use requires a paid monthly commercial subscription from the Licensor.
+
+Note: copies or versions that were already distributed under the prior MIT license remain available under MIT for those copies/versions.
+
 ## What It Does
 
 - Listens for newline-delimited NSS records on TCP (default `0.0.0.0:514`)
@@ -223,6 +234,37 @@ Run:
 ```bash
 ./target/release/nss-ingestor run --config ./config.toml
 ```
+
+## Direct Parquet Backfill (No TCP Pipeline)
+
+Use this mode when you only need realistic Parquet data quickly (for example to test `nss-quarry`) and do not need to exercise the live TCP ingest path.
+
+It bypasses:
+- TCP listener
+- parser loop
+- durability spool
+
+It still uses the production Parquet writer and partition layout.
+
+Example:
+
+```bash
+./target/release/nss-ingestor backfill-direct \
+  --config /etc/nss-ingestor/config.toml \
+  --total-rows 100000000 \
+  --days 13 \
+  --workers 32 \
+  --seed 20260404 \
+  --progress-every 1000000
+```
+
+Arguments:
+- `--config`: normal ingestor config file (writer/schema settings are reused)
+- `--total-rows`: total synthetic rows to generate
+- `--days`: spread event timestamps across the last N days
+- `--workers`: parallel generators feeding the writer channel
+- `--seed`: deterministic seed for repeatable data
+- `--progress-every`: log progress every N generated rows
 
 ## Get the Project
 

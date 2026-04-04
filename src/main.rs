@@ -1,3 +1,4 @@
+mod backfill;
 mod config;
 mod dlq;
 mod durability;
@@ -18,6 +19,7 @@ use clap::{Parser, Subcommand};
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info};
 
+use crate::backfill::run_direct_backfill;
 use crate::config::AppConfig;
 use crate::dlq::run_dlq_writer;
 use crate::durability::Durability;
@@ -66,6 +68,20 @@ enum Command {
         #[arg(long, default_value_t = false)]
         force: bool,
     },
+    BackfillDirect {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long, default_value_t = 100_000)]
+        total_rows: u64,
+        #[arg(long, default_value_t = 13)]
+        days: u32,
+        #[arg(long, default_value_t = 8)]
+        workers: usize,
+        #[arg(long, default_value_t = 20260404)]
+        seed: u64,
+        #[arg(long, default_value_t = 1_000_000)]
+        progress_every: u64,
+    },
 }
 
 #[tokio::main]
@@ -83,6 +99,14 @@ async fn main() -> Result<()> {
             output,
             force,
         } => generate_schema(feed_template, feed_template_file, output, force),
+        Command::BackfillDirect {
+            config,
+            total_rows,
+            days,
+            workers,
+            seed,
+            progress_every,
+        } => run_backfill_direct(config, total_rows, days, workers, seed, progress_every).await,
     }
 }
 
@@ -525,4 +549,18 @@ fn generate_schema(
         "schema generated from feed template"
     );
     Ok(())
+}
+
+async fn run_backfill_direct(
+    config_path: PathBuf,
+    total_rows: u64,
+    days: u32,
+    workers: usize,
+    seed: u64,
+    progress_every: u64,
+) -> Result<()> {
+    let cfg = AppConfig::load(&config_path)?;
+    let schema = Arc::new(SchemaDef::load(&cfg.schema.path)?);
+    schema.validate()?;
+    run_direct_backfill(cfg, schema, total_rows, days, workers, seed, progress_every).await
 }
