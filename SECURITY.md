@@ -35,6 +35,9 @@ Temporary advisory exceptions are managed in [`audit-allowlist.txt`](./audit-all
 
 Current exception:
 - `RUSTSEC-2024-0436` (`paste`, transitive via `parquet`)
+  Owner: platform engineering.
+  Review cadence: monthly dependency review.
+  Removal target: remove immediately once the `parquet` dependency chain no longer requires `paste`.
 
 ## Release Artifact Verification
 

@@ -115,6 +115,7 @@ Tuning guidance:
 Schema contract behavior.
 
 - `profile`: Built-in profile ID (`zscaler_web_v2_ops` or `zscaler_web_v1`)
+- If `profile` is omitted by a custom config path, the code fallback remains `zscaler_web_v1` for legacy compatibility. The example config and installer explicitly pin `zscaler_web_v2_ops`.
 - `custom_schema_mode`: `false` by default; when `false`, the built-in profile is enforced
 - `path`: Schema YAML path (used only when `custom_schema_mode = true`)
 - `time_field` / `time_format` / `timezone`: When `custom_schema_mode = false`, these are enforced from the selected profile at runtime
