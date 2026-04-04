@@ -79,7 +79,13 @@ pub fn parse_record(
     schema: &SchemaDef,
     cfg: &AppConfig,
 ) -> anyhow::Result<ParsedRecord> {
-    let fields = parse_csv_fields(&raw.line)?;
+    let mut fields = parse_csv_fields(&raw.line)?;
+    let expected = schema.fields.len();
+    if fields.len() != expected
+        && let Some(repaired) = try_repair_field_count(&fields, schema)
+    {
+        fields = repaired;
+    }
     if fields.len() != schema.fields.len() {
         anyhow::bail!(
             "field count mismatch: got {}, expected {}",
@@ -118,6 +124,63 @@ pub fn parse_record(
 
 pub fn count_csv_fields(line: &str) -> anyhow::Result<usize> {
     Ok(parse_csv_fields(line)?.len())
+}
+
+fn try_repair_field_count(fields: &[String], schema: &SchemaDef) -> Option<Vec<String>> {
+    let expected = schema.fields.len();
+    let got = fields.len();
+    if got <= expected {
+        return None;
+    }
+    let extra = got - expected;
+    if extra > 8 {
+        return None;
+    }
+
+    let mut candidate_indexes = Vec::new();
+    for name in [
+        "eurl",
+        "url",
+        "b64url",
+        "ereferer",
+        "referer",
+        "ua",
+        "eua",
+        "b64ua",
+        "prompt_req",
+        "eprompt_req",
+    ] {
+        if let Some(idx) = schema.field_index(name) {
+            candidate_indexes.push(idx);
+        }
+    }
+
+    if candidate_indexes.is_empty() {
+        for (idx, field) in schema.fields.iter().enumerate() {
+            let n = field.name.as_str();
+            if n.contains("url") || n.contains("referer") || n.ends_with("ua") || n == "ua" {
+                candidate_indexes.push(idx);
+            }
+        }
+    }
+
+    candidate_indexes.sort_unstable();
+    candidate_indexes.dedup();
+
+    for idx in candidate_indexes {
+        if idx + extra >= got {
+            continue;
+        }
+        let mut repaired = Vec::with_capacity(expected);
+        repaired.extend_from_slice(&fields[..idx]);
+        repaired.push(fields[idx..=idx + extra].join(","));
+        repaired.extend_from_slice(&fields[idx + extra + 1..]);
+        if repaired.len() == expected {
+            return Some(repaired);
+        }
+    }
+
+    None
 }
 
 fn parse_csv_fields(line: &str) -> anyhow::Result<Vec<String>> {
@@ -377,5 +440,74 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("non-nullable"));
         assert!(msg.contains("action"));
+    }
+
+    #[test]
+    fn repair_field_count_merges_overflow_into_url_field() {
+        let schema = SchemaDef {
+            fields: vec![
+                FieldDef {
+                    name: "time".to_string(),
+                    logical_type: LogicalType::Timestamp,
+                    nullable: false,
+                },
+                FieldDef {
+                    name: "eurl".to_string(),
+                    logical_type: LogicalType::String,
+                    nullable: true,
+                },
+                FieldDef {
+                    name: "action".to_string(),
+                    logical_type: LogicalType::String,
+                    nullable: true,
+                },
+            ],
+        };
+        let broken = vec![
+            "Mon Jun 20 15:29:11 2022".to_string(),
+            "example.com/?k=\"Chromium\"|v=\"146\"".to_string(),
+            "\"Not-A.Brand\"|v=\"24\"".to_string(),
+            "Allowed".to_string(),
+        ];
+        let repaired = try_repair_field_count(&broken, &schema).expect("must repair");
+        assert_eq!(repaired.len(), 3);
+        assert_eq!(
+            repaired[1],
+            "example.com/?k=\"Chromium\"|v=\"146\",\"Not-A.Brand\"|v=\"24\""
+        );
+        assert_eq!(repaired[2], "Allowed");
+    }
+
+    #[test]
+    fn parse_record_recovers_when_embedded_url_quotes_expand_field_count() {
+        let schema = SchemaDef {
+            fields: vec![
+                FieldDef {
+                    name: "time".to_string(),
+                    logical_type: LogicalType::Timestamp,
+                    nullable: false,
+                },
+                FieldDef {
+                    name: "eurl".to_string(),
+                    logical_type: LogicalType::String,
+                    nullable: true,
+                },
+                FieldDef {
+                    name: "action".to_string(),
+                    logical_type: LogicalType::String,
+                    nullable: true,
+                },
+            ],
+        };
+        let cfg = AppConfig::default();
+        let raw = RawRecord {
+            line: "\"Mon Jun 20 15:29:11 2022\",\"example.com/?k=\"\"Chromium\"\"|v=\"\"146\"\",\"\"Not-A.Brand\"\"|v=\"\"24\"\"\",\"Allowed\"".to_string(),
+            peer_addr: None,
+            received_at: Utc::now(),
+            spool_seq: None,
+        };
+        let parsed = parse_record(&raw, &schema, &cfg).expect("must parse with repair");
+        assert_eq!(parsed.values.len(), 3);
+        assert_eq!(parsed.values[2], Some("Allowed".to_string()));
     }
 }
