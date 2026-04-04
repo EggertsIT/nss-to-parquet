@@ -20,7 +20,10 @@ use clap::{Parser, Subcommand};
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
 
-use crate::backfill::run_direct_backfill;
+use crate::backfill::{
+    DEFAULT_MAX_DEVICES_PER_USER, DEFAULT_MIN_DEVICES_PER_USER, DEFAULT_USER_COUNT, FleetConfig,
+    run_direct_backfill,
+};
 use crate::config::AppConfig;
 use crate::dlq::run_dlq_writer;
 use crate::durability::Durability;
@@ -89,6 +92,12 @@ enum Command {
         seed: u64,
         #[arg(long, default_value_t = 1_000_000)]
         progress_every: u64,
+        #[arg(long, default_value_t = DEFAULT_USER_COUNT)]
+        user_count: u32,
+        #[arg(long, default_value_t = DEFAULT_MIN_DEVICES_PER_USER)]
+        min_devices_per_user: u8,
+        #[arg(long, default_value_t = DEFAULT_MAX_DEVICES_PER_USER)]
+        max_devices_per_user: u8,
     },
 }
 
@@ -118,7 +127,25 @@ async fn main() -> Result<()> {
             workers,
             seed,
             progress_every,
-        } => run_backfill_direct(config, total_rows, days, workers, seed, progress_every).await,
+            user_count,
+            min_devices_per_user,
+            max_devices_per_user,
+        } => {
+            run_backfill_direct(
+                config,
+                total_rows,
+                days,
+                workers,
+                seed,
+                progress_every,
+                FleetConfig {
+                    user_count,
+                    min_devices_per_user,
+                    max_devices_per_user,
+                },
+            )
+            .await
+        }
     }
 }
 
@@ -647,9 +674,20 @@ async fn run_backfill_direct(
     workers: usize,
     seed: u64,
     progress_every: u64,
+    fleet: FleetConfig,
 ) -> Result<()> {
     let mut cfg = AppConfig::load(&config_path)?;
     let effective_schema = resolve_effective_schema(&mut cfg)?;
     let schema = Arc::new(effective_schema.schema);
-    run_direct_backfill(cfg, schema, total_rows, days, workers, seed, progress_every).await
+    run_direct_backfill(
+        cfg,
+        schema,
+        total_rows,
+        days,
+        workers,
+        seed,
+        progress_every,
+        fleet,
+    )
+    .await
 }

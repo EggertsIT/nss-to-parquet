@@ -272,6 +272,9 @@ Example:
   --days 13 \
   --workers 32 \
   --seed 20260404 \
+  --user-count 42000 \
+  --min-devices-per-user 2 \
+  --max-devices-per-user 4 \
   --progress-every 1000000
 ```
 
@@ -281,7 +284,15 @@ Arguments:
 - `--days`: spread event timestamps across the last N days
 - `--workers`: parallel generators feeding the writer channel
 - `--seed`: deterministic seed for repeatable data
+- `--user-count`: number of synthetic users in the generated fleet
+- `--min-devices-per-user`: minimum persistent devices assigned to each user
+- `--max-devices-per-user`: maximum persistent devices assigned to each user
 - `--progress-every`: log progress every N generated rows
+
+Synthetic fleet behavior:
+- Users are assigned stable departments, locations, and login names.
+- Each user gets a persistent device pool, so repeated queries show the same users on the same hostnames/IPs.
+- URLs, apps, categories, SSL/TLS outcomes, geo destinations, blocked reasons, and file-control events are correlated instead of random per field.
 
 ## Get the Project
 
