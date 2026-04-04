@@ -7,9 +7,12 @@ ingress_channel_capacity = 50000
 parsed_channel_capacity = 50000
 
 [schema]
-profile = "zscaler_web_v1"
+# Built-in profiles:
+# - zscaler_web_v2_ops (recommended for blocked/connection/SSL/geo operations)
+# - zscaler_web_v1 (legacy compatibility profile)
+profile = "zscaler_web_v2_ops"
 custom_schema_mode = false
-path = "schema.example.yaml"
+path = "schema.zscaler_web_v2_ops.yaml"
 time_field = "time"
 time_format = "%a %b %d %H:%M:%S %Y"
 timezone = "UTC"

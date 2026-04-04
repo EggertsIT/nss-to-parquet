@@ -1,0 +1,134 @@
+fields:
+  - name: time
+    type: timestamp
+    nullable: false
+  - name: tz
+    type: string
+  - name: epochtime
+    type: int64
+  - name: login
+    type: string
+  - name: dept
+    type: string
+  - name: action
+    type: string
+  - name: ruletype
+    type: string
+  - name: rulelabel
+    type: string
+  - name: reason
+    type: string
+  - name: proto
+    type: string
+  - name: reqmethod
+    type: string
+  - name: respcode
+    type: string
+  - name: url
+    type: string
+  - name: host
+    type: string
+  - name: referer
+    type: string
+  - name: ua
+    type: string
+  - name: appname
+    type: string
+  - name: appclass
+    type: string
+  - name: app_status
+    type: string
+  - name: urlclass
+    type: string
+  - name: urlsupercat
+    type: string
+  - name: urlcat
+    type: string
+  - name: threatname
+    type: string
+  - name: malwarecat
+    type: string
+  - name: malwareclass
+    type: string
+  - name: riskscore
+    type: int64
+  - name: threatseverity
+    type: string
+  - name: dlpeng
+    type: string
+  - name: dlpdict
+    type: string
+  - name: ssldecrypted
+    type: string
+  - name: ssl_rulename
+    type: string
+  - name: externalspr
+    type: string
+  - name: keyprotectiontype
+    type: string
+  - name: clienttlsversion
+    type: string
+  - name: srvtlsversion
+    type: string
+  - name: clientsslcipher
+    type: string
+  - name: srvsslcipher
+    type: string
+  - name: cltsslfailreason
+    type: string
+  - name: cltsslfailcount
+    type: int64
+  - name: srvocspresult
+    type: string
+  - name: srvcertchainvalpass
+    type: string
+  - name: srvcertvalidationtype
+    type: string
+  - name: is_ssluntrustedca
+    type: string
+  - name: is_sslselfsigned
+    type: string
+  - name: is_sslexpiredca
+    type: string
+  - name: cip
+    type: ip
+  - name: cintip
+    type: ip
+  - name: cpubip
+    type: ip
+  - name: sip
+    type: ip
+  - name: clt_sport
+    type: int64
+  - name: srv_dport
+    type: int64
+  - name: srcip_country
+    type: string
+  - name: dstip_country
+    type: string
+  - name: is_src_cntry_risky
+    type: string
+  - name: is_dst_cntry_risky
+    type: string
+  - name: location
+    type: string
+  - name: userlocationname
+    type: string
+  - name: datacenter
+    type: string
+  - name: datacentercountry
+    type: string
+  - name: trafficredirectmethod
+    type: string
+  - name: alpnprotocol
+    type: string
+  - name: reqsize
+    type: int64
+  - name: respsize
+    type: int64
+  - name: totalsize
+    type: int64
+  - name: devicehostname
+    type: string
+  - name: deviceowner
+    type: string

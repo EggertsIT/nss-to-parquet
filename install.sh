@@ -17,7 +17,7 @@ ALLOW_UNSUPPORTED_OS=0
 ALLOW_ROOT=0
 LISTENER_BIND_ADDR="${LISTENER_BIND_ADDR:-0.0.0.0:514}"
 METRICS_BIND_ADDR="${METRICS_BIND_ADDR:-127.0.0.1:9090}"
-SCHEMA_PROFILE="zscaler_web_v1"
+SCHEMA_PROFILE="${SCHEMA_PROFILE:-zscaler_web_v2_ops}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${SCRIPT_DIR}"
@@ -46,12 +46,14 @@ Options:
   --no-start              Do not enable/start systemd service.
   --bind-addr ADDR        Listener bind address (default: 0.0.0.0:514).
   --metrics-addr ADDR     Metrics bind address (default: 127.0.0.1:9090).
+  --schema-profile ID     Built-in schema profile (zscaler_web_v2_ops or zscaler_web_v1).
   --allow-unsupported-os  Continue even if OS is not RHEL/Rocky family.
   --allow-root            Allow direct root execution (not recommended).
   -h, --help              Show this help.
 
 Notes:
-  Installer enforces canonical schema profile: zscaler_web_v1.
+  Installer enforces canonical schema profile from --schema-profile.
+  Default schema profile is zscaler_web_v2_ops.
   Feed-template generation flags are no longer accepted.
 USAGE
 }
@@ -251,6 +253,8 @@ install_layout() {
 
   local built_bin="${REPO_DIR}/target/release/nss-ingestor"
   [[ -x "$built_bin" ]] || die "release binary not found: ${built_bin}"
+  "$built_bin" print-schema-profile --profile "$SCHEMA_PROFILE" --feed-template-only >/dev/null \
+    || die "unsupported schema profile: ${SCHEMA_PROFILE}"
 
   if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
     log "Creating service user ${SERVICE_USER}"
@@ -276,7 +280,11 @@ install_layout() {
   install_or_stage "$tmp_cfg" "${CONFIG_DIR}/config.toml" 0640 root "$SERVICE_GROUP"
 
   local schema_dest="${CONFIG_DIR}/schema.yaml"
-  install_or_stage "${REPO_DIR}/schema.example.yaml" "$schema_dest" 0640 root "$SERVICE_GROUP"
+  local schema_src="${REPO_DIR}/schema.example.yaml"
+  if [[ "$SCHEMA_PROFILE" == "zscaler_web_v2_ops" && -f "${REPO_DIR}/schema.zscaler_web_v2_ops.yaml" ]]; then
+    schema_src="${REPO_DIR}/schema.zscaler_web_v2_ops.yaml"
+  fi
+  install_or_stage "$schema_src" "$schema_dest" 0640 root "$SERVICE_GROUP"
 
   write_unit_template "$tmp_unit"
   install_or_stage "$tmp_unit" "$UNIT_PATH" 0644 root root
@@ -284,8 +292,21 @@ install_layout() {
   log "Validating config as ${SERVICE_USER}"
   "${SUDO[@]}" -u "$SERVICE_USER" "$BIN_PATH" validate-config --config "${CONFIG_DIR}/config.toml"
   log "Installed canonical schema profile: ${SCHEMA_PROFILE}"
-  log "Configure your NSS Feed Output exactly as:"
-  "${SUDO[@]}" -u "$SERVICE_USER" "$BIN_PATH" print-schema-profile --profile "${SCHEMA_PROFILE}" --feed-template-only
+
+  local feed_template feed_template_file
+  feed_template="$("${SUDO[@]}" -u "$SERVICE_USER" "$BIN_PATH" print-schema-profile --profile "${SCHEMA_PROFILE}" --feed-template-only)"
+  feed_template_file="${CONFIG_DIR}/feed-template.${SCHEMA_PROFILE}.txt"
+  printf '%s\n' "$feed_template" | "${SUDO[@]}" tee "$feed_template_file" >/dev/null
+  "${SUDO[@]}" chmod 0640 "$feed_template_file"
+  "${SUDO[@]}" chown root:"$SERVICE_GROUP" "$feed_template_file"
+
+  log "NSS Feed Output profile: ${SCHEMA_PROFILE}"
+  log "Profile hint: zscaler_web_v2_ops uses login/url; zscaler_web_v1 uses ologin/eurl."
+  log "Copy the next SINGLE LINE exactly into the Zscaler NSS Feed Output field (keep quotes and commas):"
+  log "----- BEGIN NSS FEED OUTPUT -----"
+  printf '%s\n' "$feed_template"
+  log "----- END NSS FEED OUTPUT -----"
+  log "Saved feed template to ${feed_template_file}"
 
   if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     log "Reloading systemd units"
@@ -329,6 +350,11 @@ parse_args() {
       --metrics-addr)
         [[ $# -ge 2 ]] || die "--metrics-addr requires a value"
         METRICS_BIND_ADDR="$2"
+        shift 2
+        ;;
+      --schema-profile)
+        [[ $# -ge 2 ]] || die "--schema-profile requires a value"
+        SCHEMA_PROFILE="$2"
         shift 2
         ;;
       --feed-template)

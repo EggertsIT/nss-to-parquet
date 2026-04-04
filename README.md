@@ -16,7 +16,7 @@ Note: copies or versions that were already distributed under the prior MIT licen
 ## What It Does
 
 - Listens for newline-delimited NSS records on TCP (default `0.0.0.0:514`)
-- Parses CSV-style records using an enforced canonical schema profile (`zscaler_web_v1`) by default
+- Parses CSV-style records using an enforced built-in schema profile (recommended: `zscaler_web_v2_ops`)
 - Optionally enforces strict type validation per schema field
 - Converts rows into typed Arrow columns and writes Parquet with ZSTD compression
 - Partitions output as `dt=YYYY-MM-DD/hour=HH` for efficient time-range queries
@@ -82,7 +82,9 @@ Or run on a high port (example `5514`) and use network forwarding.
 
 ## Configuration
 
-Use [config.example.toml](./config.example.toml) and [schema.example.yaml](./schema.example.yaml) as templates.
+Use [config.example.toml](./config.example.toml) and one of:
+- [schema.example.yaml](./schema.example.yaml) (`zscaler_web_v1` compatibility sample)
+- [schema.zscaler_web_v2_ops.yaml](./schema.zscaler_web_v2_ops.yaml) (ops-focused sample)
 
 ### How configuration is applied
 
@@ -112,7 +114,7 @@ Tuning guidance:
 
 Schema contract behavior.
 
-- `profile`: Built-in canonical profile ID (`zscaler_web_v1`)
+- `profile`: Built-in profile ID (`zscaler_web_v2_ops` or `zscaler_web_v1`)
 - `custom_schema_mode`: `false` by default; when `false`, the built-in profile is enforced
 - `path`: Schema YAML path (used only when `custom_schema_mode = true`)
 - `time_field` / `time_format` / `timezone`: When `custom_schema_mode = false`, these are enforced from the selected profile at runtime
@@ -124,6 +126,15 @@ Validation behavior:
 
 Operational note:
 - In canonical mode (`custom_schema_mode = false`), keep NSS feed output exactly aligned with the published profile template.
+
+Built-in profile guidance:
+- `zscaler_web_v2_ops`: optimized for blocked-traffic analysis, connection/network troubleshooting, SSL/TLS diagnostics, and geo reporting.
+- `zscaler_web_v1`: legacy compatibility profile.
+
+If you use `nss-quarry` with `zscaler_web_v2_ops`, update quarry field mappings from legacy encoded names to plain names:
+- `user_field = "login"` (instead of `ologin`)
+- `url_field = "url"` (instead of `eurl`)
+- `helpdesk_mask_fields` should include `login` (instead of `ologin`)
 
 #### `[writer]`
 
@@ -285,7 +296,11 @@ git clone https://github.com/EggertsIT/nss-to-parquet.git && cd nss-to-parquet &
 
 This builds the binary, installs config/schema/systemd service, validates config, and starts `nss-ingestor`.
 Run it as a privileged non-root user (with `sudo` access), not from a root login shell.
-Installer enforces canonical schema profile `zscaler_web_v1` and prints the exact NSS Feed Output template to configure.
+Installer enforces the selected built-in schema profile and prints the exact NSS Feed Output template to configure.
+Installer prints this template between `BEGIN/END NSS FEED OUTPUT` markers and stores it as:
+- `/etc/nss-ingestor/feed-template.zscaler_web_v2_ops.txt` (default)
+- `/etc/nss-ingestor/feed-template.zscaler_web_v1.txt` (if legacy profile selected)
+Default installer profile is `zscaler_web_v2_ops`. Use `--schema-profile zscaler_web_v1` for legacy compatibility.
 
 ## AWS Terraform Sample
 
@@ -324,7 +339,7 @@ Useful schema-profile command:
 
 ```bash
 # Print enforced NSS feed template for the default profile
-./target/release/nss-ingestor print-schema-profile --profile zscaler_web_v1 --feed-template-only
+./target/release/nss-ingestor print-schema-profile --profile zscaler_web_v2_ops --feed-template-only
 ```
 
 ### 1. Install OS dependencies
@@ -374,14 +389,16 @@ sudo install -d -m 0750 -o nssingestor -g nssingestor /var/lib/nss-ingestor/spoo
 
 ```bash
 sudo install -m 0640 -o root -g nssingestor config.example.toml /etc/nss-ingestor/config.toml
-sudo install -m 0640 -o root -g nssingestor schema.example.yaml /etc/nss-ingestor/schema.yaml
+sudo install -m 0640 -o root -g nssingestor schema.zscaler_web_v2_ops.yaml /etc/nss-ingestor/schema.yaml
 ```
+
+For legacy profile `zscaler_web_v1`, install `schema.example.yaml` instead.
 
 Edit `/etc/nss-ingestor/config.toml` and set production paths:
 
 ```toml
 [schema]
-profile = "zscaler_web_v1"
+profile = "zscaler_web_v2_ops"
 custom_schema_mode = false
 path = "/etc/nss-ingestor/schema.yaml"
 
@@ -517,6 +534,12 @@ http://127.0.0.1:9090/dashboard
 
 Configure your NSS feed destination to this host IP on `TCP 514` (or your custom `listener.bind_addr` port).
 Use the exact canonical feed template:
+
+```bash
+/usr/local/bin/nss-ingestor print-schema-profile --profile zscaler_web_v2_ops --feed-template-only
+```
+
+For legacy profile:
 
 ```bash
 /usr/local/bin/nss-ingestor print-schema-profile --profile zscaler_web_v1 --feed-template-only
@@ -758,7 +781,7 @@ LIMIT 50;
 - With `[durability].enabled = true`, delivery semantics are **at-least-once**.
 - If durability is disabled, semantics are **best-effort**.
 - Critical worker failures (listener/parser/writer/dlq/metrics) cause process exit so `systemd` restart can recover.
-- Keep NSS feed output aligned to the enforced canonical profile (`zscaler_web_v1`) unless you explicitly run in `custom_schema_mode`.
+- Keep NSS feed output aligned to your enforced profile (`zscaler_web_v2_ops` or `zscaler_web_v1`) unless you explicitly run in `custom_schema_mode`.
 - Tune `batch_rows` and `target_file_rows` to balance write throughput vs file size.
 - Keep retention enabled to avoid unbounded local disk growth.
 - Keep DLQ retention enabled (`[dlq].local_days > 0`) to avoid unbounded DLQ growth.
@@ -769,7 +792,7 @@ LIMIT 50;
 - `Operation not permitted` on startup:
   - Port permission issue (common on `:514`) or sandbox/network policy.
 - High parser errors:
-  - NSS feed output does not match enforced profile `zscaler_web_v1`
+  - NSS feed output does not match the configured enforced profile
   - Different delimiter/quoting behavior than expected
   - In custom mode, incorrect `time_field`/`time_format`/`timezone`
 - No Parquet files:
