@@ -15,6 +15,7 @@ When reporting, include:
 
 - Run with least privilege (dedicated service account).
 - Keep `metrics.bind_addr = "127.0.0.1:9090"` unless protected by network controls.
+- The admin force-finalize API is restricted to loopback callers and should be reached locally or via `nss-quarry`.
 - Keep `schema.strict_type_validation = true`.
 - Keep `durability.enabled = true` for at-least-once ingestion behavior.
 - Restrict inbound source IPs to trusted NSS senders.

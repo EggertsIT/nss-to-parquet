@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -6,7 +7,7 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
@@ -907,15 +908,18 @@ pub async fn run_metrics_server(
     }
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            while shutdown.changed().await.is_ok() {
-                if *shutdown.borrow() {
-                    break;
-                }
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        while shutdown.changed().await.is_ok() {
+            if *shutdown.borrow() {
+                break;
             }
-        })
-        .await?;
+        }
+    })
+    .await?;
     Ok(())
 }
 
@@ -957,7 +961,27 @@ async fn config_handler(State(state): State<MetricsState>) -> Json<ConfigOvervie
     Json((*state.config).clone())
 }
 
-async fn force_finalize_open_files_handler(State(state): State<MetricsState>) -> impl IntoResponse {
+fn is_loopback_peer(peer: &SocketAddr) -> bool {
+    peer.ip().is_loopback()
+}
+
+async fn force_finalize_open_files_handler(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<MetricsState>,
+) -> impl IntoResponse {
+    if !is_loopback_peer(&peer) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "status": "forbidden",
+                "message": "force finalize is restricted to loopback callers",
+                "peer": peer.ip().to_string(),
+                "triggered_at": Utc::now().to_rfc3339(),
+            })),
+        )
+            .into_response();
+    }
+
     let now = Utc::now();
     let now_epoch = now.timestamp();
     let cooldown_secs = state.finalize.cooldown_secs;
@@ -1252,6 +1276,7 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     #[test]
     fn timeline_records_and_rates() {
@@ -1289,5 +1314,13 @@ mod tests {
         assert!(!snapshot.trends.is_empty());
         assert_eq!(snapshot.totals.ingested, 10);
         assert_eq!(snapshot.totals.written_rows, 9);
+    }
+
+    #[test]
+    fn loopback_peer_check_only_allows_loopback_addresses() {
+        let loopback = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9090);
+        let remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 9090);
+        assert!(is_loopback_peer(&loopback));
+        assert!(!is_loopback_peer(&remote));
     }
 }
