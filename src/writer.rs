@@ -11,6 +11,7 @@ use arrow_array::{
 use chrono::{Datelike, Timelike, Utc};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, GzipLevel, ZstdLevel};
+use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
 use tokio::sync::{mpsc, watch};
 use tracing::info;
@@ -153,6 +154,8 @@ fn flush_partition(
             state.next_file_seq,
             ctx.arrow_schema,
             ctx.compression,
+            &ctx.cfg.schema.profile,
+            ctx.cfg.schema.custom_schema_mode,
         )?;
         state.active = Some(writer);
         state.next_file_seq = next_seq;
@@ -188,6 +191,8 @@ fn open_partition_writer(
     file_seq: u64,
     arrow_schema: &Arc<arrow_schema::Schema>,
     compression: &Compression,
+    schema_profile: &str,
+    custom_schema_mode: bool,
 ) -> Result<(ActiveWriter, u64)> {
     let partition_dir = output_dir.join(partition_key);
     std::fs::create_dir_all(&partition_dir)
@@ -205,6 +210,16 @@ fn open_partition_writer(
         .with_context(|| format!("failed creating parquet temp file {}", tmp_path.display()))?;
     let props = WriterProperties::builder()
         .set_compression(*compression)
+        .set_key_value_metadata(Some(vec![
+            KeyValue::new(
+                "nss_ingestor_schema_profile".to_string(),
+                schema_profile.to_string(),
+            ),
+            KeyValue::new(
+                "nss_ingestor_custom_schema_mode".to_string(),
+                custom_schema_mode.to_string(),
+            ),
+        ]))
         .build();
     let writer =
         ArrowWriter::try_new(file, Arc::clone(arrow_schema), Some(props)).with_context(|| {

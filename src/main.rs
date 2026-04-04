@@ -7,6 +7,7 @@ mod parser;
 mod retention;
 mod schema;
 mod schema_generator;
+mod schema_profile;
 mod server;
 mod types;
 mod writer;
@@ -17,7 +18,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tokio::sync::{mpsc, watch};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::backfill::run_direct_backfill;
 use crate::config::AppConfig;
@@ -30,6 +31,7 @@ use crate::parser::{ParserCtx, run_parser_loop};
 use crate::retention::run_retention_loop;
 use crate::schema::SchemaDef;
 use crate::schema_generator::generate_schema_from_feed_template;
+use crate::schema_profile::{DEFAULT_SCHEMA_PROFILE, resolve_profile};
 use crate::server::run_tcp_listener;
 use crate::types::{DlqRecord, ParsedRecord, RawRecord};
 use crate::writer::run_parquet_writer;
@@ -68,6 +70,12 @@ enum Command {
         #[arg(long, default_value_t = false)]
         force: bool,
     },
+    PrintSchemaProfile {
+        #[arg(long, default_value = DEFAULT_SCHEMA_PROFILE)]
+        profile: String,
+        #[arg(long, default_value_t = false)]
+        feed_template_only: bool,
+    },
     BackfillDirect {
         #[arg(long)]
         config: PathBuf,
@@ -99,6 +107,10 @@ async fn main() -> Result<()> {
             output,
             force,
         } => generate_schema(feed_template, feed_template_file, output, force),
+        Command::PrintSchemaProfile {
+            profile,
+            feed_template_only,
+        } => print_schema_profile(profile, feed_template_only),
         Command::BackfillDirect {
             config,
             total_rows,
@@ -119,10 +131,57 @@ fn init_tracing() {
         .init();
 }
 
+struct EffectiveSchema {
+    schema: SchemaDef,
+    schema_source: String,
+    profile: String,
+    custom_schema_mode: bool,
+    expected_feed_template: Option<String>,
+}
+
+fn resolve_effective_schema(cfg: &mut AppConfig) -> Result<EffectiveSchema> {
+    if cfg.schema.custom_schema_mode {
+        let schema = SchemaDef::load(&cfg.schema.path)?;
+        schema.validate()?;
+        return Ok(EffectiveSchema {
+            schema,
+            schema_source: cfg.schema.path.display().to_string(),
+            profile: "custom".to_string(),
+            custom_schema_mode: true,
+            expected_feed_template: None,
+        });
+    }
+
+    let profile = resolve_profile(&cfg.schema.profile)?;
+    if cfg.schema.time_field != profile.time_field
+        || cfg.schema.time_format != profile.time_format
+        || cfg.schema.timezone != profile.timezone
+    {
+        warn!(
+            profile = profile.id,
+            configured_time_field = %cfg.schema.time_field,
+            configured_time_format = %cfg.schema.time_format,
+            configured_timezone = %cfg.schema.timezone,
+            "schema profile enforced; overriding time_field/time_format/timezone from profile"
+        );
+    }
+    cfg.schema.time_field = profile.time_field.to_string();
+    cfg.schema.time_format = profile.time_format.to_string();
+    cfg.schema.timezone = profile.timezone.to_string();
+
+    Ok(EffectiveSchema {
+        schema: profile.schema,
+        schema_source: format!("builtin:{}", profile.id),
+        profile: profile.id.to_string(),
+        custom_schema_mode: false,
+        expected_feed_template: Some(profile.feed_template.to_string()),
+    })
+}
+
 async fn run(config_path: PathBuf) -> Result<()> {
-    let cfg = AppConfig::load(&config_path)?;
-    let schema = Arc::new(SchemaDef::load(&cfg.schema.path)?);
-    schema.validate()?;
+    let mut cfg = AppConfig::load(&config_path)?;
+    let effective_schema = resolve_effective_schema(&mut cfg)?;
+    let schema = Arc::new(effective_schema.schema);
     let durability = Durability::initialize(&cfg.durability)?;
 
     if schema.field_index(&cfg.schema.time_field).is_none() {
@@ -148,7 +207,10 @@ async fn run(config_path: PathBuf) -> Result<()> {
         resolved_config: serde_json::to_value(&cfg).context("failed to serialize config")?,
     };
     let schema_overview = SchemaOverview {
-        schema_path: cfg.schema.path.display().to_string(),
+        schema_path: effective_schema.schema_source,
+        schema_profile: effective_schema.profile,
+        custom_schema_mode: effective_schema.custom_schema_mode,
+        expected_feed_template: effective_schema.expected_feed_template,
         time_field: cfg.schema.time_field.clone(),
         time_format: cfg.schema.time_format.clone(),
         timezone: cfg.schema.timezone.clone(),
@@ -465,13 +527,14 @@ fn set_first_error(slot: &mut Option<anyhow::Error>, err: anyhow::Error) {
 }
 
 fn validate_config(config_path: PathBuf) -> Result<()> {
-    let cfg = AppConfig::load(&config_path)?;
-    let schema = SchemaDef::load(&cfg.schema.path)
-        .with_context(|| format!("failed to load schema from {}", cfg.schema.path.display()))?;
-    schema.validate()?;
+    let mut cfg = AppConfig::load(&config_path)?;
+    let effective_schema = resolve_effective_schema(&mut cfg)?;
+    let schema = effective_schema.schema;
     info!(
         listener = %cfg.listener.bind_addr,
         output = %cfg.writer.output_dir.display(),
+        schema_profile = %effective_schema.profile,
+        custom_schema_mode = effective_schema.custom_schema_mode,
         schema_fields = schema.fields.len(),
         "config is valid"
     );
@@ -551,6 +614,24 @@ fn generate_schema(
     Ok(())
 }
 
+fn print_schema_profile(profile_id: String, feed_template_only: bool) -> Result<()> {
+    let profile = resolve_profile(&profile_id)?;
+    if feed_template_only {
+        println!("{}", profile.feed_template);
+        return Ok(());
+    }
+
+    println!("profile: {}", profile.id);
+    println!("description: {}", profile.description);
+    println!("time_field: {}", profile.time_field);
+    println!("time_format: {}", profile.time_format);
+    println!("timezone: {}", profile.timezone);
+    println!("field_count: {}", profile.schema.fields.len());
+    println!("feed_template:");
+    println!("{}", profile.feed_template);
+    Ok(())
+}
+
 async fn run_backfill_direct(
     config_path: PathBuf,
     total_rows: u64,
@@ -559,8 +640,8 @@ async fn run_backfill_direct(
     seed: u64,
     progress_every: u64,
 ) -> Result<()> {
-    let cfg = AppConfig::load(&config_path)?;
-    let schema = Arc::new(SchemaDef::load(&cfg.schema.path)?);
-    schema.validate()?;
+    let mut cfg = AppConfig::load(&config_path)?;
+    let effective_schema = resolve_effective_schema(&mut cfg)?;
+    let schema = Arc::new(effective_schema.schema);
     run_direct_backfill(cfg, schema, total_rows, days, workers, seed, progress_every).await
 }

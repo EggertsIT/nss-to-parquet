@@ -70,6 +70,8 @@ impl Default for ListenerConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SchemaConfig {
+    pub profile: String,
+    pub custom_schema_mode: bool,
     pub path: PathBuf,
     pub time_field: String,
     pub time_format: String,
@@ -80,6 +82,8 @@ pub struct SchemaConfig {
 impl Default for SchemaConfig {
     fn default() -> Self {
         Self {
+            profile: "zscaler_web_v1".to_string(),
+            custom_schema_mode: false,
             path: PathBuf::from("schema.yaml"),
             time_field: "time".to_string(),
             time_format: "%a %b %d %H:%M:%S %Y".to_string(),

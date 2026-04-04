@@ -15,11 +15,9 @@ SKIP_BUILD=0
 NO_START=0
 ALLOW_UNSUPPORTED_OS=0
 ALLOW_ROOT=0
-NO_PROMPT_FEED_TEMPLATE=0
-FEED_TEMPLATE="${NSS_FEED_TEMPLATE:-}"
-FEED_TEMPLATE_FILE=""
 LISTENER_BIND_ADDR="${LISTENER_BIND_ADDR:-0.0.0.0:514}"
 METRICS_BIND_ADDR="${METRICS_BIND_ADDR:-127.0.0.1:9090}"
+SCHEMA_PROFILE="zscaler_web_v1"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${SCRIPT_DIR}"
@@ -48,13 +46,13 @@ Options:
   --no-start              Do not enable/start systemd service.
   --bind-addr ADDR        Listener bind address (default: 0.0.0.0:514).
   --metrics-addr ADDR     Metrics bind address (default: 127.0.0.1:9090).
-  --feed-template TEXT    NSS feed output template CSV line to generate schema.
-  --feed-template-file P  File containing NSS feed output template CSV line.
-  --no-prompt-feed-template
-                          Do not prompt interactively for NSS feed template.
   --allow-unsupported-os  Continue even if OS is not RHEL/Rocky family.
   --allow-root            Allow direct root execution (not recommended).
   -h, --help              Show this help.
+
+Notes:
+  Installer enforces canonical schema profile: zscaler_web_v1.
+  Feed-template generation flags are no longer accepted.
 USAGE
 }
 
@@ -155,6 +153,8 @@ ingress_channel_capacity = 50000
 parsed_channel_capacity = 50000
 
 [schema]
+profile = "${SCHEMA_PROFILE}"
+custom_schema_mode = false
 path = "${CONFIG_DIR}/schema.yaml"
 time_field = "time"
 time_format = "%a %b %d %H:%M:%S %Y"
@@ -267,50 +267,25 @@ install_layout() {
   log "Installing binary to ${BIN_PATH}"
   "${SUDO[@]}" install -m 0755 "$built_bin" "$BIN_PATH"
 
-  local tmp_cfg tmp_unit tmp_feed_input tmp_schema
+  local tmp_cfg tmp_unit
   tmp_cfg="$(mktemp)"
   tmp_unit="$(mktemp)"
-  tmp_feed_input="$(mktemp)"
-  tmp_schema="$(mktemp)"
-  trap "rm -f '$tmp_cfg' '$tmp_unit' '$tmp_feed_input' '$tmp_schema'" EXIT
+  trap "rm -f '$tmp_cfg' '$tmp_unit'" EXIT
 
   write_config_template "$tmp_cfg"
   install_or_stage "$tmp_cfg" "${CONFIG_DIR}/config.toml" 0640 root "$SERVICE_GROUP"
 
   local schema_dest="${CONFIG_DIR}/schema.yaml"
-  local use_generated_schema=0
-
-  if [[ -z "$FEED_TEMPLATE" && -n "$FEED_TEMPLATE_FILE" ]]; then
-    [[ -f "$FEED_TEMPLATE_FILE" ]] || die "feed template file not found: $FEED_TEMPLATE_FILE"
-    FEED_TEMPLATE="$(cat "$FEED_TEMPLATE_FILE")"
-  fi
-
-  if [[ -z "$FEED_TEMPLATE" && "$NO_PROMPT_FEED_TEMPLATE" -eq 0 && ! -f "$schema_dest" && -t 0 && -t 1 ]]; then
-    log "Paste your NSS feed output template (single CSV line), then press Enter."
-    log "Press Enter with empty input to skip and use schema.example.yaml."
-    IFS= read -r FEED_TEMPLATE || true
-  fi
-
-  if [[ -n "$FEED_TEMPLATE" ]]; then
-    printf '%s\n' "$FEED_TEMPLATE" >"$tmp_feed_input"
-    log "Generating schema from provided NSS feed template"
-    "$built_bin" generate-schema --feed-template-file "$tmp_feed_input" --output "$tmp_schema" --force
-    install_or_stage "$tmp_schema" "$schema_dest" 0640 root "$SERVICE_GROUP"
-    use_generated_schema=1
-  else
-    install_or_stage "${REPO_DIR}/schema.example.yaml" "$schema_dest" 0640 root "$SERVICE_GROUP"
-  fi
+  install_or_stage "${REPO_DIR}/schema.example.yaml" "$schema_dest" 0640 root "$SERVICE_GROUP"
 
   write_unit_template "$tmp_unit"
   install_or_stage "$tmp_unit" "$UNIT_PATH" 0644 root root
 
   log "Validating config as ${SERVICE_USER}"
   "${SUDO[@]}" -u "$SERVICE_USER" "$BIN_PATH" validate-config --config "${CONFIG_DIR}/config.toml"
-  if [[ "$use_generated_schema" -eq 1 ]]; then
-    log "Installed schema generated from NSS feed template"
-  else
-    warn "Installed default schema.example.yaml (no feed template provided)"
-  fi
+  log "Installed canonical schema profile: ${SCHEMA_PROFILE}"
+  log "Configure your NSS Feed Output exactly as:"
+  "${SUDO[@]}" -u "$SERVICE_USER" "$BIN_PATH" print-schema-profile --profile "${SCHEMA_PROFILE}" --feed-template-only
 
   if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     log "Reloading systemd units"
@@ -357,18 +332,13 @@ parse_args() {
         shift 2
         ;;
       --feed-template)
-        [[ $# -ge 2 ]] || die "--feed-template requires a value"
-        FEED_TEMPLATE="$2"
-        shift 2
+        die "--feed-template is no longer supported. Canonical schema profile ${SCHEMA_PROFILE} is enforced."
         ;;
       --feed-template-file)
-        [[ $# -ge 2 ]] || die "--feed-template-file requires a value"
-        FEED_TEMPLATE_FILE="$2"
-        shift 2
+        die "--feed-template-file is no longer supported. Canonical schema profile ${SCHEMA_PROFILE} is enforced."
         ;;
       --no-prompt-feed-template)
-        NO_PROMPT_FEED_TEMPLATE=1
-        shift
+        die "--no-prompt-feed-template is no longer supported. Canonical schema profile ${SCHEMA_PROFILE} is enforced."
         ;;
       --allow-unsupported-os)
         ALLOW_UNSUPPORTED_OS=1
@@ -392,10 +362,6 @@ parse_args() {
 main() {
   parse_args "$@"
   setup_sudo
-
-  if [[ -n "$FEED_TEMPLATE" && -n "$FEED_TEMPLATE_FILE" ]]; then
-    die "use either --feed-template or --feed-template-file, not both"
-  fi
 
   if [[ "$INVOKER_USER" == "root" && "$INSTALL_RUST" -eq 1 && "$ALLOW_ROOT" -eq 0 ]]; then
     die "--install-rust from a root account would install Rust under /root. Run from a privileged non-root user (sudo), or pass --allow-root if intentional."

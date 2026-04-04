@@ -2,25 +2,23 @@ fields:
   - name: time
     type: timestamp
     nullable: false
-  - name: location
+  - name: ologin
     type: string
   - name: proto
     type: string
-  - name: url
+  - name: eurl
     type: string
   - name: action
     type: string
   - name: appname
     type: string
+  - name: app_status
+    type: string
   - name: appclass
     type: string
-  - name: app_risk_score
-    type: int64
   - name: reqsize
     type: int64
   - name: respsize
-    type: int64
-  - name: totalsize
     type: int64
   - name: urlclass
     type: string
@@ -28,17 +26,19 @@ fields:
     type: string
   - name: urlcat
     type: string
-  - name: urlcatmethod
+  - name: malwarecat
     type: string
   - name: threatname
     type: string
   - name: riskscore
     type: int64
-  - name: malwarecat
+  - name: threatseverity
     type: string
-  - name: malwareclass
+  - name: dlpeng
     type: string
-  - name: trafficredirectmethod
+  - name: dlpdict
+    type: string
+  - name: location
     type: string
   - name: dept
     type: string
@@ -49,22 +49,22 @@ fields:
   - name: reqmethod
     type: string
   - name: respcode
-    type: int64
+    type: string
   - name: ua
     type: string
-  - name: referer
+  - name: ereferer
     type: string
   - name: ruletype
     type: string
   - name: rulelabel
     type: string
-  - name: reason
+  - name: contenttype
     type: string
-  - name: ssl_rulename
+  - name: unscannabletype
     type: string
-  - name: dstip_country
+  - name: deviceowner
     type: string
-  - name: srcip_country
+  - name: devicehostname
     type: string
-  - name: userlocationname
+  - name: keyprotectiontype
     type: string

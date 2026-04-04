@@ -829,6 +829,9 @@ struct MetricsState {
 #[derive(Debug, Clone, Serialize)]
 pub struct SchemaOverview {
     pub schema_path: String,
+    pub schema_profile: String,
+    pub custom_schema_mode: bool,
+    pub expected_feed_template: Option<String>,
     pub time_field: String,
     pub time_format: String,
     pub timezone: String,
@@ -1048,8 +1051,9 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
     async function loadSchema() {
       const res = await fetch('/api/schema', { cache: 'no-store' });
       const s = await res.json();
+      const mode = s.custom_schema_mode ? 'custom' : 'profile_enforced';
       byId('schemaMeta').textContent =
-        `${s.field_count} fields | path: ${s.schema_path} | time_field: ${s.time_field} | timezone: ${s.timezone} | strict_type_validation: ${s.strict_type_validation}`;
+        `${s.field_count} fields | source: ${s.schema_path} | profile: ${s.schema_profile} | mode: ${mode} | time_field: ${s.time_field} | timezone: ${s.timezone} | strict_type_validation: ${s.strict_type_validation}`;
 
       const rows = byId('schemaRows');
       rows.innerHTML = '';

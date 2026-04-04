@@ -16,7 +16,7 @@ Note: copies or versions that were already distributed under the prior MIT licen
 ## What It Does
 
 - Listens for newline-delimited NSS records on TCP (default `0.0.0.0:514`)
-- Parses CSV-style records using an external, ordered schema file
+- Parses CSV-style records using an enforced canonical schema profile (`zscaler_web_v1`) by default
 - Optionally enforces strict type validation per schema field
 - Converts rows into typed Arrow columns and writes Parquet with ZSTD compression
 - Partitions output as `dt=YYYY-MM-DD/hour=HH` for efficient time-range queries
@@ -110,12 +110,12 @@ Tuning guidance:
 
 #### `[schema]`
 
-How raw feed columns are mapped and typed.
+Schema contract behavior.
 
-- `path`: Schema YAML path
-- `time_field`: Field name used as event time for partitioning
-- `time_format`: Chrono parse format for non-epoch timestamps
-- `timezone`: Parse timezone (must match NSS feed timezone)
+- `profile`: Built-in canonical profile ID (`zscaler_web_v1`)
+- `custom_schema_mode`: `false` by default; when `false`, the built-in profile is enforced
+- `path`: Schema YAML path (used only when `custom_schema_mode = true`)
+- `time_field` / `time_format` / `timezone`: When `custom_schema_mode = false`, these are enforced from the selected profile at runtime
 - `strict_type_validation`: If `true`, invalid typed values go to DLQ
 
 Validation behavior:
@@ -123,7 +123,7 @@ Validation behavior:
 - Type validation is additionally enforced when `strict_type_validation = true`.
 
 Operational note:
-- If NSS feed output order changes, regenerate/update schema before production traffic.
+- In canonical mode (`custom_schema_mode = false`), keep NSS feed output exactly aligned with the published profile template.
 
 #### `[writer]`
 
@@ -189,6 +189,8 @@ Semantics:
 - Disabled: best-effort delivery.
 
 ### `schema.yaml` requirements
+
+These requirements apply when `custom_schema_mode = true`.
 
 - Field order must exactly match NSS feed output order.
 - Each field must declare:
@@ -283,7 +285,7 @@ git clone https://github.com/EggertsIT/nss-to-parquet.git && cd nss-to-parquet &
 
 This builds the binary, installs config/schema/systemd service, validates config, and starts `nss-ingestor`.
 Run it as a privileged non-root user (with `sudo` access), not from a root login shell.
-On first install, the script prompts for your NSS Feed Output template line and generates `/etc/nss-ingestor/schema.yaml` from it.
+Installer enforces canonical schema profile `zscaler_web_v1` and prints the exact NSS Feed Output template to configure.
 
 ## AWS Terraform Sample
 
@@ -318,17 +320,11 @@ Installer options:
 ./install.sh --help
 ```
 
-Useful schema-generation flags for installer:
+Useful schema-profile command:
 
 ```bash
-# Non-interactive: provide template directly
-./install.sh --feed-template '"%s{time}","%s{ologin}",...,"%s{keyprotectiontype}"'
-
-# Non-interactive: provide template from file
-./install.sh --feed-template-file ./nss_feed_template.csv
-
-# Disable prompt and use default schema.example.yaml fallback
-./install.sh --no-prompt-feed-template
+# Print enforced NSS feed template for the default profile
+./target/release/nss-ingestor print-schema-profile --profile zscaler_web_v1 --feed-template-only
 ```
 
 ### 1. Install OS dependencies
@@ -385,6 +381,8 @@ Edit `/etc/nss-ingestor/config.toml` and set production paths:
 
 ```toml
 [schema]
+profile = "zscaler_web_v1"
+custom_schema_mode = false
 path = "/etc/nss-ingestor/schema.yaml"
 
 [writer]
@@ -518,6 +516,11 @@ http://127.0.0.1:9090/dashboard
 ### 11. Point Zscaler NSS feed
 
 Configure your NSS feed destination to this host IP on `TCP 514` (or your custom `listener.bind_addr` port).
+Use the exact canonical feed template:
+
+```bash
+/usr/local/bin/nss-ingestor print-schema-profile --profile zscaler_web_v1 --feed-template-only
+```
 
 ## Validation Commands
 
@@ -550,6 +553,7 @@ cargo run -- generate-schema \
 ```
 
 If output file already exists, add `--force`.
+Use generated schema only with `custom_schema_mode = true`.
 
 Benchmark sustained ingest rate:
 
@@ -642,6 +646,8 @@ Schema overview API (active schema loaded by service):
 ```text
 GET /api/schema
 ```
+
+`/api/schema` includes profile/mode metadata (`schema_profile`, `custom_schema_mode`) and, in profile mode, the expected NSS feed template.
 
 Config overview API (active resolved config loaded by service):
 
@@ -752,7 +758,7 @@ LIMIT 50;
 - With `[durability].enabled = true`, delivery semantics are **at-least-once**.
 - If durability is disabled, semantics are **best-effort**.
 - Critical worker failures (listener/parser/writer/dlq/metrics) cause process exit so `systemd` restart can recover.
-- Keep schema synchronized with NSS feed template changes.
+- Keep NSS feed output aligned to the enforced canonical profile (`zscaler_web_v1`) unless you explicitly run in `custom_schema_mode`.
 - Tune `batch_rows` and `target_file_rows` to balance write throughput vs file size.
 - Keep retention enabled to avoid unbounded local disk growth.
 - Keep DLQ retention enabled (`[dlq].local_days > 0`) to avoid unbounded DLQ growth.
@@ -763,9 +769,9 @@ LIMIT 50;
 - `Operation not permitted` on startup:
   - Port permission issue (common on `:514`) or sandbox/network policy.
 - High parser errors:
-  - NSS feed order drifted from `schema.yaml`
+  - NSS feed output does not match enforced profile `zscaler_web_v1`
   - Different delimiter/quoting behavior than expected
-  - Incorrect `time_field`/`time_format`/`timezone`
+  - In custom mode, incorrect `time_field`/`time_format`/`timezone`
 - No Parquet files:
   - Check listener bind, ingress traffic, parser metrics, and DLQ contents.
 - High `nss_ingestor_connection_dropped_total`:
