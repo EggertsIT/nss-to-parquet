@@ -10,7 +10,7 @@ use crate::config::AppConfig;
 use crate::metrics::Metrics;
 use crate::schema::{LogicalType, SchemaDef};
 use crate::types::ParsedRecord;
-use crate::writer::run_parquet_writer;
+use crate::writer::{WriterControlMessage, run_parquet_writer};
 
 pub async fn run_direct_backfill(
     cfg: AppConfig,
@@ -49,6 +49,7 @@ pub async fn run_direct_backfill(
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let channel_capacity = cfg.listener.parsed_channel_capacity.max(50_000);
     let (parsed_tx, parsed_rx) = mpsc::channel::<ParsedRecord>(channel_capacity);
+    let (_writer_control_tx, writer_control_rx) = mpsc::channel::<WriterControlMessage>(4);
 
     let writer_cfg = cfg.clone();
     let writer_schema = Arc::clone(&schema);
@@ -59,6 +60,7 @@ pub async fn run_direct_backfill(
             writer_cfg,
             writer_schema,
             parsed_rx,
+            writer_control_rx,
             writer_metrics,
             None,
             &mut writer_shutdown,

@@ -34,7 +34,7 @@ use crate::schema_generator::generate_schema_from_feed_template;
 use crate::schema_profile::{DEFAULT_SCHEMA_PROFILE, resolve_profile};
 use crate::server::run_tcp_listener;
 use crate::types::{DlqRecord, ParsedRecord, RawRecord};
-use crate::writer::run_parquet_writer;
+use crate::writer::{WriterControlMessage, run_parquet_writer};
 
 #[derive(Parser, Debug)]
 #[command(name = "nss-ingestor")]
@@ -234,6 +234,7 @@ async fn run(config_path: PathBuf) -> Result<()> {
     let (parsed_tx, parsed_rx) =
         mpsc::channel::<ParsedRecord>(cfg.listener.parsed_channel_capacity);
     let (dlq_tx, dlq_rx) = mpsc::channel::<DlqRecord>(cfg.dlq.channel_capacity);
+    let (writer_control_tx, writer_control_rx) = mpsc::channel::<WriterControlMessage>(32);
 
     let mut metrics_task = if cfg.metrics.enabled {
         let addr = cfg.metrics.bind_addr.clone();
@@ -247,6 +248,8 @@ async fn run(config_path: PathBuf) -> Result<()> {
         };
         let schema_overview = schema_overview.clone();
         let config_overview = config_overview.clone();
+        let control_tx = writer_control_tx.clone();
+        let cooldown_secs = cfg.writer.force_finalize_cooldown_secs;
         let shutdown = shutdown_rx.clone();
         Some(tokio::spawn(async move {
             run_metrics_server(
@@ -255,6 +258,8 @@ async fn run(config_path: PathBuf) -> Result<()> {
                 settings,
                 schema_overview,
                 config_overview,
+                control_tx,
+                cooldown_secs,
                 shutdown,
             )
             .await
@@ -304,6 +309,7 @@ async fn run(config_path: PathBuf) -> Result<()> {
             writer_cfg,
             writer_schema,
             parsed_rx,
+            writer_control_rx,
             writer_metrics,
             writer_durability,
             &mut writer_shutdown,
@@ -533,6 +539,8 @@ fn validate_config(config_path: PathBuf) -> Result<()> {
     info!(
         listener = %cfg.listener.bind_addr,
         output = %cfg.writer.output_dir.display(),
+        writer_max_file_age_secs = cfg.writer.max_file_age_secs,
+        writer_force_finalize_cooldown_secs = cfg.writer.force_finalize_cooldown_secs,
         schema_profile = %effective_schema.profile,
         custom_schema_mode = effective_schema.custom_schema_mode,
         schema_fields = schema.fields.len(),

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use arrow_array::{
@@ -13,7 +13,8 @@ use parquet::arrow::ArrowWriter;
 use parquet::basic::{Compression, GzipLevel, ZstdLevel};
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
-use tokio::sync::{mpsc, watch};
+use serde::Serialize;
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::info;
 
 use crate::config::AppConfig;
@@ -28,6 +29,21 @@ struct ActiveWriter {
     tmp_path: PathBuf,
     final_path: PathBuf,
     max_spool_seq: Option<u64>,
+    opened_at: Instant,
+}
+
+#[derive(Debug)]
+pub enum WriterControlMessage {
+    ForceFinalizeOpenFiles {
+        respond_to: oneshot::Sender<std::result::Result<ForceFinalizeOpenFilesResult, String>>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ForceFinalizeOpenFilesResult {
+    pub finalized_files: u64,
+    pub finalized_rows: u64,
+    pub skipped_empty_writers: u64,
 }
 
 #[derive(Default)]
@@ -40,6 +56,7 @@ pub async fn run_parquet_writer(
     cfg: AppConfig,
     schema: Arc<SchemaDef>,
     mut parsed_rx: mpsc::Receiver<ParsedRecord>,
+    mut control_rx: mpsc::Receiver<WriterControlMessage>,
     metrics: Arc<Metrics>,
     durability: Option<Arc<Durability>>,
     shutdown: &mut watch::Receiver<bool>,
@@ -74,6 +91,7 @@ pub async fn run_parquet_writer(
     let mut states: HashMap<String, PartitionState> = HashMap::new();
     let mut flush_tick =
         tokio::time::interval(Duration::from_secs(cfg.writer.flush_interval_secs.max(1)));
+    let mut control_channel_open = true;
 
     loop {
         tokio::select! {
@@ -84,6 +102,16 @@ pub async fn run_parquet_writer(
             }
             _ = flush_tick.tick() => {
                 flush_all_partitions(&ctx, &mut pending, &mut states)?;
+            }
+            maybe_control = control_rx.recv(), if control_channel_open => {
+                match maybe_control {
+                    Some(control) => {
+                        handle_writer_control(control, &ctx, &mut pending, &mut states);
+                    }
+                    None => {
+                        control_channel_open = false;
+                    }
+                }
             }
             maybe = parsed_rx.recv() => {
                 let Some(record) = maybe else { break; };
@@ -104,6 +132,25 @@ pub async fn run_parquet_writer(
     Ok(())
 }
 
+fn handle_writer_control(
+    control: WriterControlMessage,
+    ctx: &FlushCtx<'_>,
+    pending: &mut HashMap<String, Vec<ParsedRecord>>,
+    states: &mut HashMap<String, PartitionState>,
+) {
+    match control {
+        WriterControlMessage::ForceFinalizeOpenFiles { respond_to } => {
+            let result = (|| -> Result<ForceFinalizeOpenFilesResult> {
+                flush_all_partitions(ctx, pending, states)?;
+                force_finalize_open_files(states, ctx.metrics, ctx.durability)
+            })();
+
+            let response = result.map_err(|err| err.to_string());
+            let _ = respond_to.send(response);
+        }
+    }
+}
+
 struct FlushCtx<'a> {
     cfg: &'a AppConfig,
     schema: &'a SchemaDef,
@@ -122,6 +169,24 @@ fn flush_all_partitions(
     let keys = pending.keys().cloned().collect::<Vec<_>>();
     for key in keys {
         flush_partition(ctx, &key, pending, states)?;
+    }
+    rotate_expired_partitions(ctx, states)?;
+    Ok(())
+}
+
+fn rotate_expired_partitions(
+    ctx: &FlushCtx<'_>,
+    states: &mut HashMap<String, PartitionState>,
+) -> Result<()> {
+    let max_age_secs = ctx.cfg.writer.max_file_age_secs;
+    if max_age_secs == 0 {
+        return Ok(());
+    }
+    let max_age = Duration::from_secs(max_age_secs);
+    for state in states.values_mut() {
+        if should_rotate_by_age(state, max_age) {
+            let _ = close_partition_writer(state, ctx.metrics, ctx.durability)?;
+        }
     }
     Ok(())
 }
@@ -145,7 +210,7 @@ fn flush_partition(
     let state = states.entry(key.to_string()).or_default();
 
     if should_rotate(state, batch_rows, ctx.cfg.writer.target_file_rows) {
-        close_partition_writer(state, ctx.metrics, ctx.durability)?;
+        let _ = close_partition_writer(state, ctx.metrics, ctx.durability)?;
     }
     if state.active.is_none() {
         let (writer, next_seq) = open_partition_writer(
@@ -170,9 +235,43 @@ fn flush_partition(
         }
     }
     if should_rotate(state, 0, ctx.cfg.writer.target_file_rows) {
-        close_partition_writer(state, ctx.metrics, ctx.durability)?;
+        let _ = close_partition_writer(state, ctx.metrics, ctx.durability)?;
     }
     Ok(())
+}
+
+fn force_finalize_open_files(
+    states: &mut HashMap<String, PartitionState>,
+    metrics: &Metrics,
+    durability: Option<&Durability>,
+) -> Result<ForceFinalizeOpenFilesResult> {
+    let mut finalized_files = 0_u64;
+    let mut finalized_rows = 0_u64;
+    let mut skipped_empty_writers = 0_u64;
+
+    for state in states.values_mut() {
+        let should_finalize = state
+            .active
+            .as_ref()
+            .map(|active| active.rows_in_file > 0)
+            .unwrap_or(false);
+        if !should_finalize {
+            if state.active.is_some() {
+                skipped_empty_writers += 1;
+            }
+            continue;
+        }
+        if let Some(closed) = close_partition_writer(state, metrics, durability)? {
+            finalized_files += 1;
+            finalized_rows += closed.rows_in_file as u64;
+        }
+    }
+
+    Ok(ForceFinalizeOpenFilesResult {
+        finalized_files,
+        finalized_rows,
+        skipped_empty_writers,
+    })
 }
 
 fn should_rotate(state: &PartitionState, incoming_rows: usize, target_rows: usize) -> bool {
@@ -183,6 +282,13 @@ fn should_rotate(state: &PartitionState, incoming_rows: usize, target_rows: usiz
         return false;
     };
     active.rows_in_file > 0 && (active.rows_in_file + incoming_rows >= target_rows)
+}
+
+fn should_rotate_by_age(state: &PartitionState, max_age: Duration) -> bool {
+    let Some(active) = state.active.as_ref() else {
+        return false;
+    };
+    active.rows_in_file > 0 && active.opened_at.elapsed() >= max_age
 }
 
 fn open_partition_writer(
@@ -235,6 +341,7 @@ fn open_partition_writer(
             tmp_path,
             final_path,
             max_spool_seq: None,
+            opened_at: Instant::now(),
         },
         seq + 1,
     ))
@@ -244,10 +351,11 @@ fn close_partition_writer(
     state: &mut PartitionState,
     metrics: &Metrics,
     durability: Option<&Durability>,
-) -> Result<()> {
+) -> Result<Option<ClosedFileStats>> {
     let Some(active) = state.active.take() else {
-        return Ok(());
+        return Ok(None);
     };
+    let rows_in_file = active.rows_in_file;
     let _metadata = active.writer.close()?;
     std::fs::rename(&active.tmp_path, &active.final_path).with_context(|| {
         format!(
@@ -266,7 +374,11 @@ fn close_partition_writer(
         metrics.observe_durability_committed(1);
     }
     metrics.observe_written_files(1);
-    Ok(())
+    Ok(Some(ClosedFileStats { rows_in_file }))
+}
+
+struct ClosedFileStats {
+    rows_in_file: usize,
 }
 
 fn close_all_writers(
@@ -275,7 +387,7 @@ fn close_all_writers(
     durability: Option<&Durability>,
 ) -> Result<()> {
     for state in states.values_mut() {
-        close_partition_writer(state, metrics, durability)?;
+        let _ = close_partition_writer(state, metrics, durability)?;
     }
     Ok(())
 }

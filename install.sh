@@ -167,7 +167,9 @@ strict_type_validation = true
 output_dir = "${STATE_DIR}/data"
 batch_rows = 10000
 flush_interval_secs = 5
-target_file_rows = 250000
+target_file_rows = 10000000
+max_file_age_secs = 0
+force_finalize_cooldown_secs = 30
 compression = "zstd"
 
 [dlq]

@@ -100,6 +100,8 @@ pub struct WriterConfig {
     pub batch_rows: usize,
     pub flush_interval_secs: u64,
     pub target_file_rows: usize,
+    pub max_file_age_secs: u64,
+    pub force_finalize_cooldown_secs: u64,
     pub compression: String,
 }
 
@@ -109,7 +111,9 @@ impl Default for WriterConfig {
             output_dir: PathBuf::from("data"),
             batch_rows: 10_000,
             flush_interval_secs: 5,
-            target_file_rows: 250_000,
+            target_file_rows: 10_000_000,
+            max_file_age_secs: 0,
+            force_finalize_cooldown_secs: 30,
             compression: "zstd".to_string(),
         }
     }

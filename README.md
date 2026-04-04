@@ -144,6 +144,8 @@ Parquet write shape and throughput/latency behavior.
 - `batch_rows`: Rows per in-memory batch before write
 - `flush_interval_secs`: Time-based flush interval
 - `target_file_rows`: Rotate parquet file around this row count
+- `max_file_age_secs`: Finalize a parquet file after this age even if row target is not reached (`0` disables age-based finalize)
+- `force_finalize_cooldown_secs`: Cooldown for admin-triggered `force finalize` API calls (default `30`)
 - `compression`: `zstd` (recommended) or other supported codec
 
 Startup behavior:
@@ -152,6 +154,8 @@ Startup behavior:
 Tuning guidance:
 - Higher `batch_rows` improves throughput but increases memory and flush latency.
 - Higher `target_file_rows` reduces file count but increases single-file size.
+- Lower `max_file_age_secs` reduces search visibility delay in low-volume periods by finalizing files sooner.
+- Default profile is high-volume optimized: `target_file_rows = 10000000` and `max_file_age_secs = 0`.
 
 #### `[dlq]`
 
@@ -404,6 +408,9 @@ path = "/etc/nss-ingestor/schema.yaml"
 
 [writer]
 output_dir = "/var/lib/nss-ingestor/data"
+target_file_rows = 10000000
+max_file_age_secs = 0
+force_finalize_cooldown_secs = 30
 
 [dlq]
 path = "/var/lib/nss-ingestor/dlq"
@@ -678,6 +685,15 @@ Config overview API (active resolved config loaded by service):
 GET /api/config
 ```
 
+Admin operation API (finalizes non-empty open parquet files immediately):
+
+```text
+POST /api/admin/force-finalize-open-files
+```
+
+This endpoint is intended to be triggered by the admin workflow in `nss-quarry` and is rate-limited by `writer.force_finalize_cooldown_secs`.
+Keep `metrics.bind_addr` loopback-only (`127.0.0.1`) unless you front it with an authenticated reverse proxy.
+
 Built-in dashboard (if `metrics.dashboard_enabled = true`):
 
 ```text
@@ -783,6 +799,7 @@ LIMIT 50;
 - Critical worker failures (listener/parser/writer/dlq/metrics) cause process exit so `systemd` restart can recover.
 - Keep NSS feed output aligned to your enforced profile (`zscaler_web_v2_ops` or `zscaler_web_v1`) unless you explicitly run in `custom_schema_mode`.
 - Tune `batch_rows` and `target_file_rows` to balance write throughput vs file size.
+- For high ingest rates, keep `max_file_age_secs = 0` and rely on row-based rotation for best compression.
 - Keep retention enabled to avoid unbounded local disk growth.
 - Keep DLQ retention enabled (`[dlq].local_days > 0`) to avoid unbounded DLQ growth.
 - Service handles `SIGTERM` (for `systemctl restart/stop`) and performs graceful writer shutdown/finalize.

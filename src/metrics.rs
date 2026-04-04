@@ -3,17 +3,20 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::time::Duration;
 
 use anyhow::Result;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use tokio::sync::watch;
+use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot, watch};
 use tracing::warn;
+
+use crate::writer::{ForceFinalizeOpenFilesResult, WriterControlMessage};
 
 #[derive(Debug, Clone)]
 pub struct StatsSettings {
@@ -824,6 +827,14 @@ struct MetricsState {
     settings: StatsSettings,
     schema: Arc<SchemaOverview>,
     config: Arc<ConfigOverview>,
+    finalize: FinalizeState,
+}
+
+#[derive(Clone)]
+struct FinalizeState {
+    control_tx: mpsc::Sender<WriterControlMessage>,
+    cooldown_secs: u64,
+    last_trigger_epoch: Arc<AsyncMutex<Option<i64>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -855,12 +866,15 @@ pub struct ConfigOverview {
     pub resolved_config: serde_json::Value,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_metrics_server(
     bind_addr: String,
     metrics: Arc<Metrics>,
     settings: StatsSettings,
     schema: SchemaOverview,
     config: ConfigOverview,
+    control_tx: mpsc::Sender<WriterControlMessage>,
+    force_finalize_cooldown_secs: u64,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let state = MetricsState {
@@ -868,6 +882,11 @@ pub async fn run_metrics_server(
         settings,
         schema: Arc::new(schema),
         config: Arc::new(config),
+        finalize: FinalizeState {
+            control_tx,
+            cooldown_secs: force_finalize_cooldown_secs,
+            last_trigger_epoch: Arc::new(AsyncMutex::new(None)),
+        },
     };
 
     let mut app = Router::new()
@@ -877,6 +896,10 @@ pub async fn run_metrics_server(
         .route("/api/stats", get(stats_handler))
         .route("/api/schema", get(schema_handler))
         .route("/api/config", get(config_handler))
+        .route(
+            "/api/admin/force-finalize-open-files",
+            post(force_finalize_open_files_handler),
+        )
         .with_state(state.clone());
 
     if state.settings.dashboard_enabled {
@@ -932,6 +955,101 @@ async fn schema_handler(State(state): State<MetricsState>) -> Json<SchemaOvervie
 
 async fn config_handler(State(state): State<MetricsState>) -> Json<ConfigOverview> {
     Json((*state.config).clone())
+}
+
+async fn force_finalize_open_files_handler(State(state): State<MetricsState>) -> impl IntoResponse {
+    let now = Utc::now();
+    let now_epoch = now.timestamp();
+    let cooldown_secs = state.finalize.cooldown_secs;
+
+    if cooldown_secs > 0 {
+        let mut last = state.finalize.last_trigger_epoch.lock().await;
+        if let Some(last_epoch) = *last {
+            let elapsed = now_epoch.saturating_sub(last_epoch);
+            if elapsed < cooldown_secs as i64 {
+                let retry_after = cooldown_secs.saturating_sub(elapsed as u64);
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(serde_json::json!({
+                        "status": "cooldown",
+                        "message": "force finalize is rate-limited",
+                        "cooldown_secs": cooldown_secs,
+                        "retry_after_secs": retry_after,
+                        "triggered_at": now.to_rfc3339(),
+                    })),
+                )
+                    .into_response();
+            }
+        }
+        *last = Some(now_epoch);
+    }
+
+    let (respond_to, recv) = oneshot::channel();
+    if state
+        .finalize
+        .control_tx
+        .send(WriterControlMessage::ForceFinalizeOpenFiles { respond_to })
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "parquet writer control channel is unavailable",
+                "triggered_at": now.to_rfc3339(),
+            })),
+        )
+            .into_response();
+    }
+
+    match tokio::time::timeout(Duration::from_secs(15), recv).await {
+        Ok(Ok(Ok(result))) => force_finalize_success(now, cooldown_secs, result).into_response(),
+        Ok(Ok(Err(err))) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": err,
+                "triggered_at": now.to_rfc3339(),
+            })),
+        )
+            .into_response(),
+        Ok(Err(_)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "parquet writer did not return a response",
+                "triggered_at": now.to_rfc3339(),
+            })),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(serde_json::json!({
+                "status": "error",
+                "message": "timed out waiting for parquet writer",
+                "triggered_at": now.to_rfc3339(),
+            })),
+        )
+            .into_response(),
+    }
+}
+
+fn force_finalize_success(
+    now: chrono::DateTime<Utc>,
+    cooldown_secs: u64,
+    result: ForceFinalizeOpenFilesResult,
+) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ok",
+            "message": "open parquet files finalized",
+            "cooldown_secs": cooldown_secs,
+            "triggered_at": now.to_rfc3339(),
+            "result": result,
+        })),
+    )
 }
 
 async fn dashboard_handler() -> Html<&'static str> {
