@@ -273,6 +273,7 @@ Example:
   --days 13 \
   --workers 32 \
   --seed 20260404 \
+  --target-lps 11574 \
   --user-count 42000 \
   --min-devices-per-user 2 \
   --max-devices-per-user 4 \
@@ -285,10 +286,27 @@ Arguments:
 - `--days`: spread event timestamps across the last N days
 - `--workers`: parallel generators feeding the writer channel
 - `--seed`: deterministic seed for repeatable data
+- `--target-lps`: optional global generation throttle (`0` = unthrottled)
 - `--user-count`: number of synthetic users in the generated fleet
 - `--min-devices-per-user`: minimum persistent devices assigned to each user
 - `--max-devices-per-user`: maximum persistent devices assigned to each user
 - `--progress-every`: log progress every N generated rows
+
+### Backfill Job at 11,574 Lines/Second
+
+Use the bundled wrapper script for a controlled-rate backfill job:
+
+```bash
+cargo build --release
+./scripts/backfill_11574_lps.sh
+```
+
+Override defaults with environment variables:
+
+```bash
+TARGET_LPS=11574 TOTAL_ROWS=1080000000 DAYS=1 WORKERS=24 \
+CONFIG=/etc/nss-ingestor/config.toml ./scripts/backfill_11574_lps.sh
+```
 
 Synthetic fleet behavior:
 - Users are assigned stable departments, locations, and login names.

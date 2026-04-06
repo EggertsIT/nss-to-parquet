@@ -90,6 +90,8 @@ enum Command {
         workers: usize,
         #[arg(long, default_value_t = 20260404)]
         seed: u64,
+        #[arg(long, default_value_t = 0)]
+        target_lps: u64,
         #[arg(long, default_value_t = 1_000_000)]
         progress_every: u64,
         #[arg(long, default_value_t = DEFAULT_USER_COUNT)]
@@ -126,6 +128,7 @@ async fn main() -> Result<()> {
             days,
             workers,
             seed,
+            target_lps,
             progress_every,
             user_count,
             min_devices_per_user,
@@ -133,15 +136,18 @@ async fn main() -> Result<()> {
         } => {
             run_backfill_direct(
                 config,
-                total_rows,
-                days,
-                workers,
-                seed,
-                progress_every,
-                FleetConfig {
-                    user_count,
-                    min_devices_per_user,
-                    max_devices_per_user,
+                BackfillDirectOpts {
+                    total_rows,
+                    days,
+                    workers,
+                    seed,
+                    target_lps,
+                    progress_every,
+                    fleet: FleetConfig {
+                        user_count,
+                        min_devices_per_user,
+                        max_devices_per_user,
+                    },
                 },
             )
             .await
@@ -667,27 +673,30 @@ fn print_schema_profile(profile_id: String, feed_template_only: bool) -> Result<
     Ok(())
 }
 
-async fn run_backfill_direct(
-    config_path: PathBuf,
+struct BackfillDirectOpts {
     total_rows: u64,
     days: u32,
     workers: usize,
     seed: u64,
+    target_lps: u64,
     progress_every: u64,
     fleet: FleetConfig,
-) -> Result<()> {
+}
+
+async fn run_backfill_direct(config_path: PathBuf, opts: BackfillDirectOpts) -> Result<()> {
     let mut cfg = AppConfig::load(&config_path)?;
     let effective_schema = resolve_effective_schema(&mut cfg)?;
     let schema = Arc::new(effective_schema.schema);
     run_direct_backfill(
         cfg,
         schema,
-        total_rows,
-        days,
-        workers,
-        seed,
-        progress_every,
-        fleet,
+        opts.total_rows,
+        opts.days,
+        opts.workers,
+        opts.seed,
+        opts.target_lps,
+        opts.progress_every,
+        opts.fleet,
     )
     .await
 }

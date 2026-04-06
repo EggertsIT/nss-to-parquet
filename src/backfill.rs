@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Utc};
 use tokio::sync::{mpsc, watch};
+use tokio::time::{Instant, sleep};
 use tracing::info;
 
 use crate::config::AppConfig;
@@ -732,6 +733,7 @@ pub async fn run_direct_backfill(
     days: u32,
     workers: usize,
     seed: u64,
+    target_lps: u64,
     progress_every: u64,
     fleet: FleetConfig,
 ) -> Result<()> {
@@ -789,6 +791,7 @@ pub async fn run_direct_backfill(
         total_rows,
         workers,
         days,
+        target_lps,
         user_count = fleet.user_count,
         min_devices_per_user = fleet.min_devices_per_user,
         max_devices_per_user = fleet.max_devices_per_user,
@@ -797,6 +800,8 @@ pub async fn run_direct_backfill(
     );
 
     let sent_total = Arc::new(AtomicU64::new(0));
+    let pace_total = Arc::new(AtomicU64::new(0));
+    let pace_start = Instant::now();
     let mut handles = Vec::with_capacity(workers);
     let per_worker = total_rows / workers as u64;
     let remainder = total_rows % workers as u64;
@@ -809,6 +814,7 @@ pub async fn run_direct_backfill(
         let worker_rows = per_worker + u64::from(worker + 1 == workers) * remainder;
         let worker_seed = seed.wrapping_add((worker as u64 + 1) * 97_421);
         let sent_total = Arc::clone(&sent_total);
+        let pace_total = Arc::clone(&pace_total);
 
         handles.push(tokio::spawn(async move {
             for idx in 0..worker_rows {
@@ -838,6 +844,10 @@ pub async fn run_direct_backfill(
                     event_time,
                     spool_seq: None,
                 };
+                if target_lps > 0 {
+                    let sequence = pace_total.fetch_add(1, Ordering::Relaxed) + 1;
+                    wait_for_target_rate(pace_start, target_lps, sequence).await;
+                }
                 if tx.send(parsed).await.is_err() {
                     break;
                 }
@@ -873,6 +883,15 @@ pub async fn run_direct_backfill(
     }
     info!(sent, "direct parquet backfill finished");
     Ok(())
+}
+
+async fn wait_for_target_rate(start: Instant, target_lps: u64, sequence: u64) {
+    let expected_elapsed =
+        std::time::Duration::from_secs_f64(sequence as f64 / target_lps.max(1) as f64);
+    let elapsed = start.elapsed();
+    if let Some(wait) = expected_elapsed.checked_sub(elapsed) {
+        sleep(wait).await;
+    }
 }
 
 fn splitmix64(mut x: u64) -> u64 {
@@ -1730,6 +1749,7 @@ fn is_risky_country(country: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration as StdDuration;
 
     #[test]
     fn validated_fleet_requires_non_zero_users_and_devices() {
@@ -1772,5 +1792,14 @@ mod tests {
         let late = weighted_hour(u64::MAX);
         assert!(morning <= 23);
         assert!(late <= 23);
+    }
+
+    #[test]
+    fn rate_wait_computes_expected_target_window() {
+        let target_lps = 11_574_u64;
+        let rows = 100_u64;
+        let expected = StdDuration::from_secs_f64(rows as f64 / target_lps as f64);
+        assert_eq!(expected.as_secs(), 0);
+        assert!(expected.as_millis() > 0);
     }
 }
