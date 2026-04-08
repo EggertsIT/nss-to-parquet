@@ -313,6 +313,37 @@ Synthetic fleet behavior:
 - Each user gets a persistent device pool, so repeated queries show the same users on the same hostnames/IPs.
 - URLs, apps, categories, SSL/TLS outcomes, geo destinations, blocked reasons, and file-control events are correlated instead of random per field.
 
+### Disk Sizing Guidance
+
+Parquet size depends on schema width, cardinality, compression ratio, rotation policy, and how repetitive your traffic is, so treat sizing as an estimate, not a contract.
+
+Lab measurement from this project:
+- `482,190,677` written rows occupied `31,120,531,841` bytes of Parquet
+- Effective compression ratio on disk: about `64.5 bytes/row`
+- Practical shorthand: `~30 GB per 500 million rows`
+
+Planning formula:
+
+```text
+estimated_parquet_bytes = expected_rows * 65
+estimated_parquet_gb    = expected_rows * 65 / 1_000_000_000
+```
+
+Examples:
+- `100,000,000` rows: about `6.5 GB`
+- `500,000,000` rows: about `32.5 GB`
+- `1,000,000,000` rows: about `65 GB`
+
+Enterprise recommendation:
+- Reserve at least `25-35%` extra disk beyond estimated Parquet size for:
+  - open writers and hourly rotation overlap
+  - durability spool
+  - DLQ files
+  - temporary backfill/maintenance activity
+- For `nss-quarry`, size the query host against the same retained Parquet footprint, because it reads the same dataset.
+
+If you retain `14` days locally, multiply the expected daily row volume by `14`, then add the headroom above.
+
 ## Get the Project
 
 ```bash
